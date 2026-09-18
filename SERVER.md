@@ -4,7 +4,7 @@ Dos servicios: `scanner` analiza tokens; `paper` mantiene una cartera de dinero 
 
 ## Preparación
 
-Necesitas un VPS Linux con acceso SSH, Docker Engine y el complemento Compose. La instalación de Docker depende del sistema; sigue las instrucciones oficiales para [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) o [Debian](https://docs.docker.com/engine/install/debian/). No se abre ningún puerto web ni se necesita dominio.
+Necesitas un VPS Linux con acceso SSH, Docker Engine y el complemento Compose 2.24 o posterior. La instalación de Docker depende del sistema; sigue las instrucciones oficiales para [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) o [Debian](https://docs.docker.com/engine/install/debian/). No se abre ningún puerto web ni se necesita dominio.
 
 Usa una carpeta dedicada y la versión que incluya estos archivos:
 
@@ -49,7 +49,7 @@ docker compose exec paper python server.py report
 
 Usa `config --quiet`: la salida completa de `docker compose config` podría mostrar variables del entorno. Los contenedores funcionan como usuario sin privilegios, con sistema de archivos de solo lectura salvo datos y `/tmp`. No se copian claves a la imagen. Los logs de Docker rotan; los datos históricos de SQLite y el CSV crecen y necesitan espacio y copias periódicas.
 
-`restart: unless-stopped` reinicia procesos que terminan y permite recuperar el servicio cuando Docker arranca. El estado `healthy` solo indica progreso reciente del bucle (últimos 15 minutos), **no** calidad de datos, conexión satisfactoria a Jupiter ni rentabilidad. Docker no reinicia automáticamente un proceso solo por estar `unhealthy`: consulta los logs y, si procede, usa `docker compose restart scanner paper`. No se ha instalado un sistema externo de avisos.
+`restart: unless-stopped` reinicia procesos que terminan y permite recuperar el servicio cuando Docker arranca. El estado `healthy` solo indica progreso reciente del bucle (últimos 15 minutos), **no** calidad de datos, conexión satisfactoria a Jupiter ni rentabilidad. Docker no reinicia automáticamente un proceso solo por estar `unhealthy`: consulta los logs y, si procede, usa `docker compose restart scanner paper`. Puedes activar el servicio opcional de [avisos por Telegram](TELEGRAM.md); requiere vincularlo antes de enviar mensajes.
 
 El informe muestra saldo ficticio, coste comprometido, posiciones, cierres recientes, resultado realizado y bloqueos de entrada. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
 

@@ -2,7 +2,7 @@
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 126 pruebas automáticas. Incluye una cartera exclusivamente ficticia y servicios Docker para VPS. Falta completar la validación en vivo con una clave de Jupiter y reunir resultados prospectivos. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura real.
+Estado: versión de investigación, con 138 pruebas automáticas. Incluye una cartera exclusivamente ficticia, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
@@ -68,7 +68,7 @@ El stream utiliza una conexión y solo `subscribeNewToken` / `subscribeMigration
 | Actividad | Jupiter Organic Score y estadísticas por ventanas, con control de caducidad | La clasificación del proveedor no demuestra personas reales ni rentabilidad |
 | Trayectoria | Múltiples snapshots espaciados, actividad orgánica sostenida y deterioro de liquidez | Ventanas móviles no se suman como compradores nuevos; respuestas de caché repetidas no cuentan como confirmaciones |
 | Entrada/salida | Cotizaciones Jupiter v2 sin `taker`, en USDC y por tamaño | Son cotizaciones independientes; no simulan el efecto de nuestra propia compra ni garantizan ejecución |
-| Alertas | Candidato, invalidación, motivos, evidencia y caducidad en SQLite/JSON | Locales; no se mandan mensajes a Telegram ni otros servicios |
+| Alertas | Candidato e invalidación en SQLite/JSON; aperturas, cierres e incidencias de simulación por Telegram si se configura | Telegram requiere vincular un chat privado; las candidaturas no se envían cada ciclo |
 
 Un cambio de pool no reinicia las fechas conocidas del token. La trayectoria de liquidez del nuevo pool empieza por separado. No llamamos “seguro” a un candidato: significa que supera las comprobaciones implementadas bajo la política indicada.
 

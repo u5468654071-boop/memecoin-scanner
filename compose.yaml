@@ -42,5 +42,19 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+  telegram:
+    <<: *common
+    profiles: [telegram]
+    env_file:
+      - path: .env.telegram
+        required: false
+    entrypoint: [python, telegram_notifications.py]
+    command: [run]
+    healthcheck:
+      test: [CMD, python, telegram_notifications.py, health]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 volumes:
   state:
