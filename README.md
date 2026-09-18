@@ -1,121 +1,151 @@
-# Escáner de riesgo de memecoins — v0.2
+# Memecoin Scanner v0.5.1
 
-## Qué es esto (y qué no es)
+Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Después de ver esa lista de vídeos de YouTube sobre "bots de IA que hacen
-trading de memecoins", esto es la versión honesta de lo que realmente se
-puede construir con datos públicos y verificables:
+Estado: versión de investigación, con 100 pruebas automáticas. Falta completar la validación en vivo con una clave de Jupiter y reunir resultados prospectivos. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura real.
 
-- **Es** una herramienta que yo mismo ejecuto: busca candidatos, consulta
-  datos de mercado y riesgo on-chain real, y puntúa. Tú no tienes que buscar
-  nada a mano ni dar de alta ninguna cuenta para la versión actual.
-- **No es** un bot que ejecuta operaciones. No toca ninguna wallet, no
-  gestiona claves privadas, no coloca ni una sola orden. Eso es intencional:
-  no voy a operar con tu capital ni custodiar tus claves.
-- **No es** una máquina de predecir qué memecoin va a multiplicarse. El
-  score mide señales de manipulación/trampa conocidas, no potencial de
-  subida. Un score bajo no significa "cómpralo" — solo que no se detectaron
-  las señales concretas que este script sabe buscar.
+La revisión 0.5.1 exige un tramo continuo de observaciones válidas, detecta retiradas de liquidez desde máximos intermedios y separa los informes por versión, política y tamaños solicitados. Los históricos 0.5.0 se conservan, pero no cuentan como confirmación de las nuevas decisiones.
 
-## Qué cambia en la v0.2
-
-Antes solo miraba datos de mercado (DexScreener). Ahora combino dos fuentes
-reales, las dos gratis y sin API key:
-
-1. **DexScreener** — descubrimiento de candidatos (tokens "boosted" +
-   perfiles recientes, dos conjuntos distintos) y datos de mercado: liquidez,
-   FDV, volumen, edad del par, ratio compras/ventas.
-2. **RugCheck** (`api.rugcheck.xyz`) — riesgo **on-chain verificado**, no
-   heurística de mercado: si el creador tiene historial de rugs previos, si
-   la propiedad está concentrada en pocas wallets, si la liquidez está
-   realmente bloqueada (`lpLockedPct`), metadata mutable, etc.
-
-Los dos scores se combinan en `combined_score`, y cada fila lleva el detalle
-de qué se detectó exactamente (`risk_flags`), para que nunca sea una caja
-negra.
-
-### Lo que encontré en la última ejecución en vivo (Solana, 31 tokens analizados)
-
-Los tres casos más claros, con datos reales del momento del escaneo:
-
-- **2Trucks1Pu / MPGA** — RugCheck marca "**Creator history of rugged
-  tokens**" (danger): la wallet creadora ya ha hecho rug pull antes en otros
-  tokens. Liquidez reportada en $0 pese a volumen de miles de dólares.
-- **LWAINZ** — "Top 10 holders high ownership", "Single holder ownership" y
-  "Low Liquidity", los tres en nivel danger: la propiedad está concentrada en
-  muy pocas manos, patrón clásico previo a un rug.
-- **SLABSY / LAMA** — mismo aviso de creador con historial de rugs, en
-  tokens con algo más de liquidez y de vida.
-
-Y varios sin ninguna señal detectada por ahora (SATS, TCAT, STEVE, ANT,
-$ROKHA, BAG, juicelee) — lo cual **no es una recomendación de compra**, solo
-significa que no dispararon ninguna de las alarmas que el script conoce.
-
-Todo esto está en `scan_log.csv`, con la dirección real de cada token para
-que puedas verificarlo tú mismo en rugcheck.xyz o dexscreener.com si quieres.
-
-## Limitación que no voy a maquillar
-
-No puedo leer directamente el firehose de lanzamientos nuevos de pump.fun
-(`frontend-api.pump.fun`): su Cloudflare bloquea las IPs de datacenter desde
-las que yo opero (lo comprobé, error 1016). Por eso el descubrimiento usa
-DexScreener (boosted + perfiles) en vez de "cada moneda que se crea en
-tiempo real", que es lo que muestran los vídeos más agresivos. Alternativas
-reales si quieres ese nivel de velocidad: un feed de pago (Bitquery, Helius
-webhooks, websocket de PumpPortal) contratado por ti, o correr esto desde tu
-propia IP residencial en vez de la mía.
-
-## Cómo se ejecuta
+## Arranque rápido
 
 ```bash
-python3 memecoin_scanner.py --chain solana --candidates boosted,profiles --limit 20
-python3 memecoin_scanner.py --chain solana --tokens <direccion1>,<direccion2>
+# Un escaneo. Funciona sin instalar paquetes, con cobertura limitada si falta Jupiter.
+python3 memecoin_scanner.py --limit 5 --max-tokens 10
 
-# Filtro de calidad: descarta lo que no cumple unos mínimos (edad, liquidez,
-# sin avisos "danger" de RugCheck, LP bloqueada, sin patrón de pump/wash trading).
-# Esto NO predice rendimiento futuro — solo descarta lo peor conocido.
-python3 memecoin_scanner.py --chain solana --candidates boosted,profiles --limit 30 \
-    --quality-filter --max-age-hours 48 --min-liquidity 3000
+# Resultado completo
+python3 memecoin_scanner.py --report
+python3 memecoin_scanner.py --alerts
 ```
 
-### Sobre el filtro de calidad
+Cada ejecución escribe `data/latest_v05.json`, un CSV y `data/scanner.sqlite3`. El JSON distingue motivos de rechazo, comprobaciones pendientes, fuentes y antigüedad de datos. Los históricos anteriores se conservan.
 
-Pasar el filtro significa: creado hace menos de X horas, con liquidez mínima
-real, sin ningún aviso "danger" de RugCheck (mint/freeze authority, creador
-con historial de rugs, holders concentrados...), con al menos la mitad de la
-liquidez bloqueada, y sin el patrón de mercado de "pump vertical + pocas
-transacciones" que suele preceder a un rug.
+**Para obtener candidatos en v0.5 se necesita `JUPITER_API_KEY`.** Sin ella se observan tokens y se guardan resultados, pero no se simula que se hayan comprobado la actividad orgánica y las rutas de salida. También se necesita un RPC de Solana accesible; el RPC público predeterminado puede responder 429. Puedes indicar uno de tu proveedor:
 
-Lo que **no** significa: que vaya a subir, que sea buena inversión, ni que
-esté libre de riesgo. Un informe independiente (recogido por CoinDesk en
-2025) estimó que el 98% de los tokens de pump.fun terminan siendo rug pulls
-o algún tipo de fraude — pump.fun lo discutió, pero incluso tomando esa
-cifra con pinzas, la base de partida en este nicho es que casi todo muere o
-es un timo. Pasar un filtro de "no tiene las peores señales conocidas" no
-cambia esa base de partida, solo descarta los casos más obvios.
+```bash
+export JUPITER_API_KEY="TU_CLAVE_DE_API_LOCAL"
+export SOLANA_RPC_URL="https://URL_DE_TU_RPC"
+```
 
-## El verdadero "backtest" es correr esto en el tiempo
+Configura las variables en tu máquina. No hacen falta claves privadas, seed phrases ni fondos. `.env.example` es solo una referencia; el programa **lee variables del entorno, no carga `.env` automáticamente**. No subas claves a GitHub. Las URLs de RPC y claves de API no se escriben en los resultados ni en errores.
 
-No voy a inventar un histórico falso de "qué memecoin habría explotado". Lo
-honesto, con la disciplina que ya aplicaste en betlab/valorbet, es:
+## Nuevos lanzamientos y observación continua
 
-1. Yo sigo corriendo este escáner periódicamente y `scan_log.csv` va
-   acumulando filas con timestamp y dirección real de cada token.
-2. Dentro de unas semanas, cruzamos cada fila con el precio real que tuvo
-   después ese token, y comprobamos si el combined_score alto de verdad se
-   correlaciona con rugs/caídas — o si es ruido.
-3. Solo si esa correlación aparece de forma consistente (y sobrevive a
-   limpiar los datos, como en tu artículo del margen negativo) tendría
-   sentido plantearse automatizar avisos en serio.
+El stream de creación/migración requiere una única dependencia opcional:
 
-## Próximos pasos posibles
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-stream.txt
 
-- Seguir corriéndolo yo periódicamente y traerte un resumen (puedo
-  programarlo como tarea recurrente).
-- Ampliar la cobertura de descubrimiento con otra chain (Base, Ethereum) o
-  con búsquedas por palabra clave en DexScreener.
-- Conectarlo como una fuente más dentro de TradeLog Elite, como pestaña de
-  "candidatos observados" en vez de operaciones reales.
+# Captura eventos gratuitos durante un minuto; no escanea ni suscribe operaciones de pago.
+python memecoin_scanner.py --stream --stream-seconds 60
 
-Dime si quieres que programe esto para que lo siga corriendo yo solo cada
-cierto tiempo, o si con ejecutarlo cuando lo pidas es suficiente.
+# Captura y escanea en primer plano. Ctrl+C detiene ambos; el historial permanece.
+python memecoin_scanner.py --watch --with-stream --interval 60 --max-tokens 10
+
+# Observación sin stream; añade descubrimiento de Jupiter si tienes clave.
+python memecoin_scanner.py --watch --candidates boosted,profiles,jupiter --interval 60
+
+# Prueba acotada: dos ciclos, sin dejar procesos permanentes.
+python memecoin_scanner.py --watch --cycles 2 --limit 2 --max-tokens 2
+```
+
+No se instala ningún servicio ni tarea programada. El intervalo es un mínimo: si las consultas tardan más, el siguiente ciclo empieza al terminar. Se atienden los vencimientos de seguimiento antes del lote y entre tokens. Los candidatos pendientes se intercalan con nuevos descubrimientos, priorizando pendientes menos recientemente analizados. Los rechazados esperan al menos 15 minutos entre reanálisis y los incompletos 5 minutos; reaparecer en una lista no salta ese descanso. Las direcciones manuales se revisan en cada ciclo. La cola activa considera tokens vistos por primera vez en las últimas 72 horas; el historial no se borra.
+
+El stream utiliza una conexión y solo `subscribeNewToken` / `subscribeMigration`. Deduplica eventos, reconecta y registra huecos. **No promete recuperar eventos no recibidos**: los intervalos sin conexión aparecen en el informe. Si el proveedor no envía `blockTime`, conserva la hora de recepción sin presentarla como hora de creación on-chain. Un sufijo `pump` no se usa como prueba de origen.
+
+## Qué comprueba ahora
+
+| Área | Implementación | Límite explícito |
+| --- | --- | --- |
+| Fases | Detectado, bonding curve, nuevo pool, migración reciente y establecido; fechas separadas | La fase inicial queda en observación: no hay analizador propio de bonding curves |
+| Permisos | `getAccountInfo` de Solana, programa, emisión, congelación, supply y decimales | Extensiones Token-2022 no soportadas bloquean candidatura; no se ignoran |
+| Pool exacto | Vincula dirección y ambos mints con su mercado en el informe completo de RugCheck | El bloqueo LP sigue siendo información externa, no una verificación independiente del contrato de bloqueo |
+| Holders | Resuelve las 20 mayores cuentas de token a sus propietarios, suma cuentas del mismo dueño y excluye reservas identificadas | Es una muestra; los porcentajes por dueño son límites inferiores, no un censo completo |
+| Grupos relacionados | Lee los grupos `insiderNetworks` de RugCheck y su concentración reportada | No construye un grafo propio; no atribuye identidad, no suma grupos que podrían solaparse |
+| Actividad | Jupiter Organic Score y estadísticas por ventanas, con control de caducidad | La clasificación del proveedor no demuestra personas reales ni rentabilidad |
+| Trayectoria | Múltiples snapshots espaciados, actividad orgánica sostenida y deterioro de liquidez | Ventanas móviles no se suman como compradores nuevos; respuestas de caché repetidas no cuentan como confirmaciones |
+| Entrada/salida | Cotizaciones Jupiter v2 sin `taker`, en USDC y por tamaño | Son cotizaciones independientes; no simulan el efecto de nuestra propia compra ni garantizan ejecución |
+| Alertas | Candidato, invalidación, motivos, evidencia y caducidad en SQLite/JSON | Locales; no se mandan mensajes a Telegram ni otros servicios |
+
+Un cambio de pool no reinicia las fechas conocidas del token. La trayectoria de liquidez del nuevo pool empieza por separado. No llamamos “seguro” a un candidato: significa que supera las comprobaciones implementadas bajo la política indicada.
+
+## Decisión y ranking
+
+La referencia v0.4 se conserva para comparar resultados en el mismo universo. La v0.5 quita el veto fijo de 30 minutos y exige evidencia temporal en su lugar. `--min-age-hours` afecta a la referencia v0.4; el criterio temporal de v0.5 se ajusta con `--min-observation-seconds` y `--min-samples`.
+
+Por defecto, además de los filtros de mercado heredados:
+
+- Tres snapshots válidos separados al menos 60 segundos y que abarquen al menos 180 segundos, del mismo token, pool, versión y política. Un hueco mayor que `--data-max-age-seconds` (300 por defecto) interrumpe la confirmación; solo se mira la última media hora.
+- Actualizaciones de Jupiter distintas, no repetir la misma respuesta en caché.
+- Organic Score ≥ 20 y al menos 5 compradores orgánicos reportados en la ventana móvil de 5 minutos de varias observaciones.
+- Caída de liquidez desde el máximo de las observaciones usadas no superior al 20%.
+- Autoridades mint/freeze revocadas y programa interpretado directamente.
+- LP del pool exacto reportada ≥ 80%.
+- Ningún dueño de la muestra > 20% del supply; los diez mayores de la muestra no superan el 60%.
+- Ningún grupo relacionado reportado > 30% del supply.
+- Cotizaciones para todos los tamaños solicitados, con coste de ida y vuelta ≤ 5% y sin caducar.
+
+**Estos umbrales son heurísticos iniciales, no una estrategia optimizada.** Cada observación guarda las políticas. Un riesgo crítico no se compensa con popularidad o liquidez. La salida distingue `candidate`, `observing`, `insufficient_data` y `rejected`; el último significa incumplir filtros, no prueba de estafa.
+
+El ranking de quienes pasan pondera a partes iguales la prioridad descriptiva de mercado heredada y el Organic Score. Se muestran por separado completitud de datos, riesgos, trayectoria y cotizaciones. El porcentaje de completitud es una lista de comprobaciones disponibles, **no una probabilidad de seguridad o beneficio**.
+
+```bash
+# Tres tamaños hipotéticos, no órdenes reales
+python3 memecoin_scanner.py --sizes-usdc 50,100,250 --max-tokens 5
+
+# Direcciones o consultas elegidas por ti
+python3 memecoin_scanner.py --tokens DIRECCION1,DIRECCION2
+python3 memecoin_scanner.py --search 'consulta'
+
+# Solo volver a analizar la cola persistente, sin nuevas listas
+python3 memecoin_scanner.py --candidates '' --max-tokens 10
+
+python3 memecoin_scanner.py --help
+```
+
+Las alertas candidatas caducan a los 5 minutos. Se renuevan al volver a superar comprobaciones tras ese plazo; no se duplican en cada ciclo. Si el token deja de cumplir, se invalida la anterior. Guarda la alerta junto con sus datos: no la interpretes como recomendación vigente horas después.
+
+## Evaluar utilidad sin inventar un backtest
+
+Cada observación prepara dos mediciones a 1, 6 y 24 horas:
+
+1. Precio indicativo del mismo par: conserva la referencia v0.4.
+2. Cotización de venta de la cantidad de tokens que habría dado la cotización inicial de compra. La salida puede usar otra ruta/pool, pero debe ser del mismo mint.
+
+```bash
+python3 memecoin_scanner.py --evaluate
+python3 memecoin_scanner.py --report
+```
+
+`--watch` ya ejecuta la evaluación mientras está abierto. Fuera del bucle, ejecuta `--evaluate` durante las ventanas de vencimiento. No puede recuperar una cotización histórica que no se consultó a tiempo.
+
+El reporte compara selección v0.5, referencia v0.4 y referencia sencilla de liquidez/actividad sobre las mismas observaciones. Separa versiones, políticas, conjunto de tamaños solicitado, selección/descarte, horizonte y tamaño. Muestra cobertura y tokens únicos. Mantiene casos sin datos (`untrackable`), plazos perdidos (`missed`) y errores pendientes; no les inventa un retorno cero.
+
+La medición de salida publica un escenario estresado: por defecto descuenta 100 puntos básicos del importe de salida y 0,10 USDC adicionales del resultado. Son **supuestos**, configurables con `--exit-stress-bps` y `--fixed-cost-usdc`; no representan una estimación exacta de gas, slippage o MEV. Las comisiones embebidas en una cotización no deben restarse de nuevo como si no estuvieran incluidas. Las medianas de retornos observables aún pueden sufrir sesgo de supervivencia.
+
+No se ha entrenado un modelo de ML ni demostrado mejora de rentabilidad. El historial permitirá comparar políticas prospectivamente. Repetir el escaneo de una moneda no convierte sus observaciones en muestras independientes.
+
+## Límites operativos
+
+- Límite predeterminado de 2.000 solicitudes **por proveedor y día UTC**, persistente y compartido entre reinicios. Cuenta reintentos. Ajusta `--daily-api-limit` a tu plan: limitar solicitudes no equivale a limitar euros facturados.
+- Las APIs tienen timeout, tamaño de respuesta máximo, pausas, reintentos acotados y tratamiento de 429. Una falta de cobertura impide aprobar comprobaciones dependientes.
+- Un bloqueo del sistema impide dos escaneos/evaluaciones simultáneos sobre la misma base de datos y se libera al terminar o caer el proceso. El colector del stream puede trabajar junto al escáner; SQLite serializa las transacciones. No dirijas dos bases de datos diferentes al mismo CSV de salida.
+- SQLite, eventos, estado y alertas sobreviven al reinicio. La escritura de una observación v0.5, sus evaluaciones y alertas es atómica. Los JSON de salida se reemplazan de forma atómica.
+- `--report` y `--alerts` son lecturas sin red. `--stream` sin eventos devuelve 2; un escaneo sin datos de mercado utilizables también devuelve 2. Un escaneo con datos puede devolver 0 aunque falte Jupiter o ningún token pase: comprueba `state`, `provider_errors` y `configuration`.
+- Las fuentes de promociones y perfiles tienen sesgo. Ni el stream ni las listas cubren todos los lanzamientos de Solana.
+
+## Verificación y compatibilidad
+
+```bash
+python3 -m unittest discover -s tests -v
+# Para incluir la prueba de WebSocket local, instala antes requirements-stream.txt.
+python3 -m py_compile memecoin_scanner.py scanner_v05.py engine.py providers.py observation_store.py event_stream.py tracking.py
+
+# Mantener comportamiento v0.4 explícitamente
+python3 memecoin_scanner.py --legacy --limit 5
+```
+
+Los tests no requieren claves ni APIs externas. Incluyen una conexión WebSocket a un servidor local de prueba, respuestas simuladas de Jupiter, persistencia, rollback, deduplicación, fases, cuotas, identificación de pools y evaluación temporal. La CI incluye Python 3.9, 3.12 y 3.13; consulta el informe de validación para saber qué se ejecutó realmente.
+
+Referencias: [Jupiter Tokens](https://developers.jup.ag/docs/tokens/token-information), [Jupiter cotizaciones](https://developers.jup.ag/docs/swap/order-and-execute), [Solana RPC](https://solana.com/docs/rpc/http/getaccountinfo), [Token Extensions](https://solana.com/docs/tokens/extensions), [PumpPortal](https://pumpportal.fun/data-api/real-time/), [RugCheck](https://api.rugcheck.xyz/swagger/index.html).

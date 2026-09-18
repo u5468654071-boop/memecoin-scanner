@@ -1,0 +1,253 @@
+"""Decisión v0.5: riesgo, evidencia temporal y salida se evalúan por separado."""
+from __future__ import annotations
+
+import time
+from dataclasses import asdict, dataclass, replace
+
+import memecoin_scanner as legacy
+from providers import Jupiter, holder_evidence, inspect_mint, network_evidence, pool_evidence, timestamp
+from version import SCANNER_VERSION
+
+
+@dataclass(frozen=True)
+class EnhancedPolicy:
+    min_organic_score: float = 20
+    max_owner_pct: float = 20
+    max_top10_pct: float = 60
+    max_network_pct: float = 30
+    max_round_trip_loss_pct: float = 5
+    min_observation_seconds: int = 180
+    min_samples: int = 3
+    min_organic_buyers_5m: int = 5
+    max_liquidity_drop_pct: float = 20
+    data_max_age_seconds: int = 300
+    exit_stress_bps: int = 100
+    fixed_cost_usdc: float = 0.10
+
+
+def trajectory(row, history, policy, now):
+    """Confirmar un tramo continuo de evidencia válida, espaciada y sin cachés repetidas."""
+    compatible = [r for r in history if r.get('scanner_version') == SCANNER_VERSION
+                  and r.get('enhanced_policy') == asdict(policy) and r.get('policy') == row.get('policy')
+                  and r.get('chain') == row.get('chain') and r.get('base_address') == row.get('base_address')
+                  and timestamp(r.get('scanned_at')) is not None and timestamp(r['scanned_at']) < now
+                  and r.get('pair_address') == row.get('pair_address')]
+
+    def usable(sample, at):
+        organic = legacy.obj(sample.get('organic'))
+        updated = legacy.number(organic.get('updated_at'), 0)
+        buyers = legacy.number(legacy.obj(legacy.obj(organic.get('windows')).get('5m')).get('numOrganicBuyers'), 0)
+        liquidity = legacy.number(sample.get('liquidity_usd'), 0)
+        return (sample.get('analysis_status') == 'ok' and organic.get('status') == 'ok'
+                and updated is not None and -30 <= at - updated <= policy.data_max_age_seconds
+                and legacy.number(organic.get('organic_score'), 0, 100) is not None
+                and buyers is not None and liquidity is not None and liquidity > 0)
+
+    result = {'status': 'warming_up', 'samples': 0,
+              'span_seconds': 0, 'liquidity_change_pct': None, 'liquidity_drawdown_pct': None,
+              'organic_buyers_change': None, 'reasons': [],
+              'window_note': 'Comparación de snapshots; ventanas 5m móviles no se suman como flujos nuevos.'}
+    if not usable(row, now):
+        result['status'] = 'incomplete'
+        result['reasons'].append('observación actual incompleta o caducada')
+        return result
+
+    samples, last, last_update, interrupted = [row], now, row['organic']['updated_at'], False
+    for old in sorted(compatible, key=lambda r: timestamp(r['scanned_at']), reverse=True):
+        at = timestamp(old['scanned_at'])
+        if now - at > 1800:
+            break
+        if last - at < 60:
+            continue
+        # Un hueco o una observación incompleta no sirven para alargar la confirmación.
+        if last - at > policy.data_max_age_seconds or not usable(old, at):
+            interrupted = True
+            break
+        if old['organic']['updated_at'] >= last_update:
+            interrupted = True
+            continue
+        samples.append(old)
+        last, last_update = at, old['organic']['updated_at']
+        if len(samples) >= policy.min_samples and now - last >= policy.min_observation_seconds:
+            break
+    result.update(samples=len(samples), span_seconds=now - last)
+    if len(samples) < policy.min_samples or now - last < policy.min_observation_seconds:
+        result['status'] = 'incomplete' if interrupted else 'warming_up'
+        result['reasons'].append('faltan observaciones válidas, distintas y continuas del mismo pool')
+        return result
+
+    liquidities = [legacy.number(r['liquidity_usd']) for r in samples]
+    buyers = [legacy.number(r['organic']['windows']['5m']['numOrganicBuyers']) for r in samples]
+    scores = [legacy.number(r['organic']['organic_score']) for r in samples]
+    result['liquidity_change_pct'] = (liquidities[0] / liquidities[-1] - 1) * 100
+    result['liquidity_drawdown_pct'] = (1 - liquidities[0] / max(liquidities)) * 100
+    result['organic_buyers_change'] = buyers[0] - buyers[-1]
+    if min(buyers) < policy.min_organic_buyers_5m or min(scores) < policy.min_organic_score:
+        result['reasons'].append('actividad orgánica insuficiente en varias observaciones')
+    if result['liquidity_drawdown_pct'] > policy.max_liquidity_drop_pct:
+        result['reasons'].append('deterioro de liquidez durante la observación')
+    result['status'] = 'deteriorating' if result['reasons'] else 'sustained'
+    return result
+
+
+def decide(row, policy):
+    hard, missing, wait = [], [], []
+    phase = row['lifecycle']['phase']
+    if phase in ('detected', 'bonding_curve', 'unknown'):
+        wait.append('fase de observación; venta inicial sin analizador específico')
+    mint = row['mint_check']
+    if mint.get('status') == 'blocked':
+        hard.extend(mint.get('reasons', []))
+    elif mint.get('status') != 'ok':
+        missing.append('comprobación directa del mint incompleta o extensión no soportada')
+    if row.get('has_danger_flag') is True or row.get('rugged') is True:
+        hard.append('riesgo crítico reportado por RugCheck')
+    pool = row['pool_check']
+    if pool['status'] != 'reported':
+        missing.append('sin evidencia LP del pool exacto')
+    elif pool['locked_pct'] < row['policy']['min_lp_locked_pct']:
+        hard.append('LP reportada del pool por debajo del umbral')
+    holders = row['holders']
+    if holders['status'] != 'ok':
+        missing.append('propietarios de las mayores cuentas sin resolver')
+    elif (holders['top1_pct_lower_bound'] > policy.max_owner_pct
+          or holders['top10_pct_lower_bound'] > policy.max_top10_pct):
+        hard.append('concentración elevada en propietarios de la muestra')
+    networks = row['networks']
+    if networks['status'] != 'reported':
+        missing.append('informe de grupos relacionados incompleto')
+    elif networks['max_group_supply_pct'] > policy.max_network_pct:
+        hard.append('grupo relacionado reportado por encima del umbral')
+    organic = row['organic']
+    if organic.get('flagged_suspicious'):
+        hard.append('Jupiter marca el token como sospechoso')
+    if organic['status'] != 'ok':
+        missing.append('actividad orgánica ausente, sin configurar o caducada')
+    elif organic['organic_score'] < policy.min_organic_score:
+        hard.append('actividad orgánica inferior al umbral')
+    if row['trajectory']['status'] in ('warming_up', 'incomplete'):
+        wait.extend(row['trajectory']['reasons'])
+    elif row['trajectory']['status'] != 'sustained':
+        hard.extend(row['trajectory']['reasons'])
+    quotes = row['exit_quotes']
+    if not quotes or any(q['status'] != 'quoted' for q in quotes):
+        missing.append('no hay cotización de ida y vuelta utilizable para todos los tamaños')
+    elif any(q['round_trip_loss_pct'] > policy.max_round_trip_loss_pct for q in quotes):
+        hard.append('coste indicativo de ida y vuelta excesivo')
+    # Aplicar filtros de mercado con edad de primer pool observada y LP del pool exacto.
+    check_row = dict(row)
+    check_row['lp_locked_pct'] = pool.get('locked_pct')
+    market_policy = legacy.Policy(**row['policy'])
+    reasons = legacy.quality_reasons(check_row, market_policy)
+    if reasons:
+        # No clasificar datos ausentes como evidencia de fraude.
+        missing_market = (row.get('analysis_status') != 'ok' or row.get('rugcheck_status') != 'ok'
+                          or pool['status'] != 'reported'
+                          or any(row.get(k) is None for k in ('price_usd','liquidity_usd','age_hours','fdv_liquidity_ratio',
+                                                            'buys_h1','sells_h1','volume_h1','price_change_h1')))
+        (missing if missing_market else hard).extend(reasons)
+    row['decision_reasons'] = list(dict.fromkeys(hard + missing + wait))
+    row['decision_checks'] = {'blockers': list(dict.fromkeys(hard)), 'missing': list(dict.fromkeys(missing)),
+                              'waiting': list(dict.fromkeys(wait))}
+    row['state'] = 'rejected' if hard else ('insufficient_data' if missing else ('observing' if wait else 'candidate'))
+    row['quality_pass'] = row['state'] == 'candidate'
+    row['quality_fail_reasons'] = row['decision_reasons']
+    scored = dict(row, quality_pass=True)
+    baseline_score = legacy.rank_candidate(scored)[0] if row.get('rugcheck_status') == 'ok' and not reasons else None
+    liquidity_priority = baseline_score or 0
+    priority = round(0.5 * liquidity_priority + 0.5 * organic.get('organic_score', 0), 2) if row['quality_pass'] else None
+    checks = [mint.get('status') == 'ok', pool['status'] == 'reported', holders['status'] == 'ok',
+              networks['status'] == 'reported', organic['status'] == 'ok', row['trajectory']['status'] == 'sustained',
+              bool(quotes) and all(q['status'] == 'quoted' for q in quotes)]
+    row['research_score'] = priority
+    row['dimensions'] = {'data_completeness_pct': round(sum(checks) / len(checks) * 100),
+                         'risk_blockers': len(set(hard)), 'organic_score': organic.get('organic_score'),
+                         'trajectory': row['trajectory']['status'], 'priority': priority,
+                         'probability_of_profit': None}
+    row['selection_evidence'] = []
+    if row['quality_pass']:
+        row['selection_evidence'] = [
+            'Autoridades de emisión y congelación revocadas según RPC.',
+            f"LP del pool exacto reportada bloqueada: {pool['locked_pct']:.1f}% (fuente externa).",
+            f"Actividad orgánica: {organic['organic_score']:.1f}/100 según Jupiter.",
+            'Actividad sostenida en observaciones espaciadas; concentración dentro de los umbrales.',
+            f"Mayor coste indicativo de ida y vuelta: {max(q['round_trip_loss_pct'] for q in quotes):.2f}%.",
+        ]
+    row['invalidates_if'] = ['Caducan los datos o falta una comprobación crítica.',
+                            'Aparece una autoridad activa, concentración excesiva o deterioro de liquidez.',
+                            'Desaparece la cotización de salida o excede el coste permitido.']
+    return row
+
+
+class Engine:
+    def __init__(self, store, transport, policy=None, enhanced_policy=None, sizes=(100.0,)):
+        self.store, self.transport = store, transport
+        self.policy = policy or legacy.Policy()
+        self.enhanced_policy = enhanced_policy or EnhancedPolicy()
+        self.sizes = sizes
+        self.jupiter = Jupiter(transport)
+
+    def analyze(self, chain, mint, sources=(), now=None):
+        # Conservar v0.4 como referencia en el mismo universo de candidatos.
+        row = legacy.analyze_token(chain, mint, self.policy, sources, now=now)
+        row['market_received_at'] = timestamp(row['scanned_at'])
+        row['baseline_v04_pass'] = row['quality_pass']
+        row['baseline_v04_policy'] = asdict(self.policy)
+        row['simple_baseline_pass'] = ((row.get('liquidity_usd') or 0) >= self.policy.min_liquidity
+                                       and (row.get('buys_h1') or 0) + (row.get('sells_h1') or 0) >= self.policy.min_txns_h1)
+        row.update(scanner_version=SCANNER_VERSION, enhanced_policy=asdict(self.enhanced_policy), provider_errors=[])
+        report = {}
+        if chain == 'solana':
+            try:
+                data = self.transport.get('https://api.rugcheck.xyz/v1/tokens/' + mint + '/report', quiet_404=True)
+                if isinstance(data, dict) and data.get('mint') == mint:
+                    report = data
+            except RuntimeError as exc:
+                row['provider_errors'].append(str(exc))
+        row['rugged'] = report.get('rugged')
+        row['pool_check'] = pool_evidence(report, row)
+        row['networks'] = network_evidence(report)
+        row['mint_check'] = {'status': 'incomplete', 'reasons': ['sin datos RPC']}
+        row['holders'] = {'status': 'incomplete', 'owners': [], 'reasons': ['sin datos RPC']}
+        if chain == 'solana':
+            try:
+                response = self.transport.rpc('getAccountInfo', [mint, {'encoding': 'jsonParsed', 'commitment': 'confirmed'}])
+                row['mint_check'] = inspect_mint(response)
+                if row['mint_check']['status'] == 'ok':
+                    row['holders'] = holder_evidence(self.transport.rpc, mint, row['mint_check']['supply_raw'],
+                                                     row['mint_check']['slot'], report)
+            except RuntimeError as exc:
+                row['provider_errors'].append(str(exc))
+        try:
+            row['organic'] = self.jupiter.token(mint, now=now, max_age=self.enhanced_policy.data_max_age_seconds) if chain == 'solana' else {'status': 'unsupported'}
+        except RuntimeError as exc:
+            row['organic'] = {'status': 'error'}
+            row['provider_errors'].append(str(exc))
+        current_time = time.time() if now is None else now
+        row['lifecycle'] = self.store.lifecycle(row, row['organic'], current_time)
+        row['selected_pool_age_hours'] = row.get('age_hours')
+        if row['lifecycle']['first_pool_at'] is not None:
+            row['age_hours'] = (current_time - row['lifecycle']['first_pool_at']) / 3600
+        # Quitar el veto fijo de 30 minutos: confirmar trayectoria será obligatorio para todas las fases.
+        row['policy'] = asdict(replace(self.policy, min_age_hours=0))
+        row['exit_quotes'] = []
+        for size in self.sizes:
+            try:
+                quote = self.jupiter.round_trip(mint, size) if chain == 'solana' else {'status': 'unsupported', 'amount_usdc': size}
+            except RuntimeError as exc:
+                quote = {'status': 'unavailable', 'amount_usdc': size, 'reason': str(exc)}
+            row['exit_quotes'].append(quote)
+        current_time = time.time() if now is None else now
+        row['scanned_at'] = legacy.utc_string(current_time)
+        if current_time - row['market_received_at'] > self.enhanced_policy.data_max_age_seconds:
+            row['analysis_status'] = 'stale'
+        if row['organic'].get('status') == 'ok' and current_time - row['organic']['updated_at'] > self.enhanced_policy.data_max_age_seconds:
+            row['organic']['status'] = 'stale'
+        for quote in row['exit_quotes']:
+            if quote['status'] == 'quoted':
+                times = [legacy.number(quote.get('received_at'))] + [
+                    legacy.number(legacy.obj(quote.get(side)).get('received_at')) for side in ('buy', 'sell')]
+                if any(at is None or at > current_time + 30 or current_time - at > 30 for at in times):
+                    quote['status'] = 'stale'
+        row['trajectory'] = trajectory(row, self.store.history(chain, mint, current_time), self.enhanced_policy, current_time)
+        return decide(row, self.enhanced_policy)
