@@ -25,8 +25,8 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose build
       - run: docker compose run --rm --no-deps --entrypoint python paper -m unittest discover -s tests -v
-      - name: Persistent paper account in a read-only container
+      - name: Persistent profiles in a read-only container
         run: |
-          docker compose run --rm --no-deps -e JUPITER_API_KEY=offline-fixture paper paper --cycles 1
-          docker compose run --rm --no-deps -e JUPITER_API_KEY=offline-fixture paper paper --cycles 1
+          docker compose run --rm --no-deps -e JUPITER_API_KEY=offline-fixture paper paper --profiles /app/profiles.json --cycles 1
+          docker compose run --rm --no-deps -e JUPITER_API_KEY=offline-fixture paper paper --profiles /app/profiles.json --cycles 1
           docker compose run --rm --no-deps paper report
