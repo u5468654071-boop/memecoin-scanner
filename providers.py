@@ -50,8 +50,6 @@ class Transport:
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
             raise ValueError('SOLANA_RPC_URL debe ser HTTPS y no contener credenciales de usuario')
         self.timeout = timeout
-        self.last = {}
-        self.cooldowns = {}
         self.opener = build_opener(NoRedirect())
 
     def get(self, url, quiet_404=False):
@@ -76,8 +74,6 @@ class Transport:
             raise RuntimeError('Endpoint de lectura no permitido')
         if provider == 'jupiter' and not self.jupiter_key:
             raise RuntimeError('Jupiter sin configurar: falta JUPITER_API_KEY')
-        if time.time() < self.cooldowns.get(provider, 0):
-            raise RuntimeError(provider + ': pausa indicada por el proveedor; reintentar más tarde')
         headers = {'Accept': 'application/json', 'User-Agent': 'memecoin-scanner/0.5'}
         if provider == 'jupiter':
             headers['x-api-key'] = self.jupiter_key
@@ -86,11 +82,13 @@ class Transport:
             headers['Content-Type'] = 'application/json'
         error = 'sin respuesta'
         for attempt in range(3):
-            self.store.reserve_call(provider, self.daily_limit)
-            wait = 1.1 - (time.monotonic() - self.last.get(provider, -1e9))
-            if wait > 0:
+            while True:
+                wait = self.store.reserve_call(provider, self.daily_limit, min_interval=1.1)
+                if wait <= 0:
+                    break
+                if wait > 30:
+                    raise RuntimeError(provider + ': reloj o intervalo pendiente; reintentar más tarde')
                 time.sleep(wait)
-            self.last[provider] = time.monotonic()
             delay = 2**attempt
             try:
                 with self.opener.open(Request(url, data=raw, headers=headers), timeout=self.timeout) as response:
@@ -112,9 +110,11 @@ class Transport:
                     except (ValueError, TypeError, OverflowError):
                         pass
                 if seconds is not None and seconds > 30:
-                    self.cooldowns[provider] = time.time() + seconds
+                    self.store.set_provider_cooldown(provider, time.time() + seconds)
                     break
                 delay = max(delay, seconds or 0)
+                if exc.code == 429:
+                    self.store.set_provider_cooldown(provider, time.time() + delay)
             except (URLError, OSError, ValueError) as exc:
                 error = type(exc).__name__  # Nunca serializar URLs de RPC o claves.
             if attempt < 2:

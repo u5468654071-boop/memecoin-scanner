@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+.venv
+venv*
+data
+__pycache__
+**/__pycache__
+*.sqlite*
+*.csv
+*.zip
+*.patch
+.DS_Store
+work
+outputs

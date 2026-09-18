@@ -20,6 +20,7 @@ from engine import Engine, EnhancedPolicy
 from observation_store import ObservationStore
 from providers import Transport
 from run_lock import ScanLock
+from service_health import heartbeat
 from version import SCANNER_VERSION
 
 
@@ -54,6 +55,7 @@ def build_parser():
     parser.add_argument('--db', type=Path, default=Path('data/scanner.sqlite3'))
     parser.add_argument('--log', type=Path, default=Path('data/scan_log_v05.csv'))
     parser.add_argument('--json-output', type=Path, default=Path('data/latest_v05.json'))
+    parser.add_argument('--heartbeat', type=Path, help='Estado local de progreso para supervisión del servicio')
     parser.add_argument('--quality-filter', action='store_true', help='Compatibilidad: el filtro está siempre activo')
     for key, value in asdict(legacy.Policy()).items():
         parser.add_argument('--' + key.replace('_', '-'), type=float, default=value,
@@ -126,6 +128,7 @@ def main(argv=None):
     stop, worker = threading.Event(), None
     original_client = legacy.CLIENT
     scan_lock = None
+    owns_scan = False
     try:
         with ObservationStore(args.db) as store:
             if args.report:
@@ -137,6 +140,7 @@ def main(argv=None):
             scan_lock = ScanLock(args.db)
             try:
                 scan_lock.acquire()
+                owns_scan = True
             except RuntimeError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
@@ -169,9 +173,11 @@ def main(argv=None):
             cycle, code = 0, 0
             while True:
                 start = time.monotonic()
+                heartbeat(args.heartbeat, 'evaluating')
                 # El seguimiento se atiende antes del siguiente lote de análisis.
                 store.evaluate_due(transport.get)
                 store.evaluate_exits(engine.jupiter)
+                heartbeat(args.heartbeat, 'discovering')
                 errors = []
                 if manual is not None:
                     provenance = {mint: ['manual'] for mint in manual}
@@ -199,10 +205,12 @@ def main(argv=None):
                                 provenance[mint] = list(dict.fromkeys(provenance[mint] + origin))
                 run_id, rows = uuid.uuid4().hex, []
                 for mint, origin in list(provenance.items())[:args.max_tokens]:
+                    heartbeat(args.heartbeat, 'analyzing')
                     print('Analizando ' + mint, file=sys.stderr)
                     row = engine.analyze(args.chain, mint, origin)
                     store.record_enriched(row, run_id)
                     rows.append(row)
+                    heartbeat(args.heartbeat, 'evaluating')
                     # Evitar que un escaneo largo abandone todos los plazos de evaluación.
                     store.evaluate_due(transport.get)
                     store.evaluate_exits(engine.jupiter)
@@ -223,6 +231,7 @@ def main(argv=None):
                 print(f'JSON: {args.json_output} | Historial: {args.db}')
                 code = 0 if rows and any(r['analysis_status'] == 'ok' for r in rows) else 2
                 cycle += 1
+                heartbeat(args.heartbeat, 'waiting')
                 if not args.watch or (args.cycles and cycle >= args.cycles):
                     break
                 time.sleep(max(0, args.interval - (time.monotonic() - start)))
@@ -237,6 +246,8 @@ def main(argv=None):
         legacy.CLIENT = original_client
         if scan_lock:
             scan_lock.close()
+        if owns_scan:
+            heartbeat(args.heartbeat, 'stopped')
 
 
 if __name__ == '__main__':

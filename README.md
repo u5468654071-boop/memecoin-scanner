@@ -1,8 +1,10 @@
-# Memecoin Scanner v0.5.1
+# Memecoin Scanner v0.6.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 100 pruebas automáticas. Falta completar la validación en vivo con una clave de Jupiter y reunir resultados prospectivos. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura real.
+Estado: versión de investigación, con 126 pruebas automáticas. Incluye una cartera exclusivamente ficticia y servicios Docker para VPS. Falta completar la validación en vivo con una clave de Jupiter y reunir resultados prospectivos. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura real.
+
+Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
 La revisión 0.5.1 exige un tramo continuo de observaciones válidas, detecta retiradas de liquidez desde máximos intermedios y separa los informes por versión, política y tamaños solicitados. Los históricos 0.5.0 se conservan, pero no cuentan como confirmación de las nuevas decisiones.
 
@@ -50,7 +52,7 @@ python memecoin_scanner.py --watch --candidates boosted,profiles,jupiter --inter
 python memecoin_scanner.py --watch --cycles 2 --limit 2 --max-tokens 2
 ```
 
-No se instala ningún servicio ni tarea programada. El intervalo es un mínimo: si las consultas tardan más, el siguiente ciclo empieza al terminar. Se atienden los vencimientos de seguimiento antes del lote y entre tokens. Los candidatos pendientes se intercalan con nuevos descubrimientos, priorizando pendientes menos recientemente analizados. Los rechazados esperan al menos 15 minutos entre reanálisis y los incompletos 5 minutos; reaparecer en una lista no salta ese descanso. Las direcciones manuales se revisan en cada ciclo. La cola activa considera tokens vistos por primera vez en las últimas 72 horas; el historial no se borra.
+Estos comandos de la CLI no instalan servicios; el despliegue continuo con Docker se describe en SERVER.md. El intervalo es un mínimo: si las consultas tardan más, el siguiente ciclo empieza al terminar. Se atienden los vencimientos de seguimiento antes del lote y entre tokens. Los candidatos pendientes se intercalan con nuevos descubrimientos, priorizando pendientes menos recientemente analizados. Los rechazados esperan al menos 15 minutos entre reanálisis y los incompletos 5 minutos; reaparecer en una lista no salta ese descanso. Las direcciones manuales se revisan en cada ciclo. La cola activa considera tokens vistos por primera vez en las últimas 72 horas; el historial no se borra.
 
 El stream utiliza una conexión y solo `subscribeNewToken` / `subscribeMigration`. Deduplica eventos, reconecta y registra huecos. **No promete recuperar eventos no recibidos**: los intervalos sin conexión aparecen en el informe. Si el proveedor no envía `blockTime`, conserva la hora de recepción sin presentarla como hora de creación on-chain. Un sufijo `pump` no se usa como prueba de origen.
 

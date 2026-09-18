@@ -1,0 +1,17 @@
+{
+  "initial_usdc": 1000,
+  "order_usdc": 25,
+  "max_positions": 3,
+  "stop_loss_pct": 15,
+  "take_profit_pct": 30,
+  "trailing_stop_pct": 10,
+  "trailing_activation_pct": 15,
+  "max_hold_seconds": 3600,
+  "daily_loss_limit_usdc": 50,
+  "slippage_bps": 50,
+  "fixed_cost_usdc_per_side": 0.05,
+  "signal_max_age_seconds": 60,
+  "quote_max_age_seconds": 30,
+  "mark_max_age_seconds": 120,
+  "reentry_cooldown_seconds": 3600
+}
