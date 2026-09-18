@@ -14,8 +14,14 @@ Fecha: 18 de septiembre de 2026. Base: `main` en `e59edec`. Los resultados de in
 - Cuotas y separación entre consultas compartidas entre conexiones; pausas persistentes del proveedor y reserva de cuota para simulación.
 - Bucle acotado de servicio, reinicio sin reinicializar capital, controles locales sin red y salud caducada/futura/detenida.
 
+## Comprobado en GitHub
+
+Las ocho comprobaciones del commit `2ad6ed3` han pasado (eventos push y pull_request): 126 tests en Python 3.9, 3.12 y 3.13, validación de Compose, construcción de la imagen, tests dentro del contenedor sin privilegios y dos arranques acotados con la misma cartera persistente. El código publicado coincidía exactamente con los archivos locales probados (árbol `ae962298c1767b3d25754304a8f05560ab9c90eb`).
+
+Evidencia: [ejecución de CI](https://github.com/u5468654071-boop/memecoin-scanner/actions/runs/35359764670) y [job del contenedor](https://github.com/u5468654071-boop/memecoin-scanner/actions/runs/35359764670/job/105647850683). La comprobación Docker se hizo en GitHub; no hay Docker Engine en la máquina de desarrollo. La prueba del contenedor usa una clave ficticia y una cartera vacía, sin consultas externas.
+
 ## Pendiente en esta entrega
 
-No hay Docker Engine disponible en la máquina de desarrollo: aún no se ha ejecutado aquí la imagen ni Compose. La CI incluye una comprobación de contenedor para ejecutar en GitHub; su configuración no equivale a haberla aprobado. El despliegue y reinicio reales del VPS necesitan su acceso SSH y la configuración local de la clave Jupiter.
+El despliegue y reinicio reales del VPS necesitan su acceso SSH y la configuración local de la clave Jupiter.
 
 No se ha probado Jupiter autenticado en vivo ni obtenido una serie prospectiva de compras/ventas ficticias reales. Los tests usan cotizaciones sintéticas. No hay órdenes, firmas, wallet ni ejecución con dinero real. Los resultados no demuestran rentabilidad.

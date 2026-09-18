@@ -11,13 +11,13 @@ Usa una carpeta dedicada y la versión que incluya estos archivos:
 ```bash
 git clone https://github.com/u5468654071-boop/memecoin-scanner.git
 cd memecoin-scanner
-git checkout feature/server-paper-trading
+git checkout main
 cp .env.example .env.server
 chmod 600 .env.server
 nano .env.server
 ```
 
-Si esta rama aún no está publicada, extrae el paquete v0.6.0 en una carpeta nueva y continúa desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.6.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -106,6 +106,16 @@ docker compose cp paper:/data/backups/copia-01.sqlite3 ./backups/copia-01.sqlite
 cp paper-policy.json ./backups/paper-policy-01.json
 ```
 
-Para restaurar, prueba en un proyecto Compose nuevo con su propio volumen: configura el archivo de política que acompañaba a la copia, ejecuta `docker compose -p restauracion create`, copia la base a `/data/scanner.sqlite3` del contenedor `paper` detenido con `docker compose -p restauracion cp`, y ajusta su propietario a `10001:10001` con un contenedor temporal como root antes de arrancar. Consulta `report` y verifica saldos/posiciones antes de habilitar el escáner. No sobrescribas una base abierta ni mezcles un archivo restaurado con los antiguos archivos `-wal` y `-shm`.
+Para restaurar, usa una carpeta y un proyecto Compose nuevos con su propio volumen, configurando el archivo de política que acompañaba a la copia y `.env.server`. En esa carpeta, con la copia disponible en `backups/copia-01.sqlite3`:
+
+```bash
+docker compose -p restauracion create
+docker compose -p restauracion cp backups/copia-01.sqlite3 paper:/data/scanner.sqlite3
+docker compose -p restauracion run --rm --no-deps --user 0:0 --entrypoint chown paper 10001:10001 /data/scanner.sqlite3
+docker compose -p restauracion run --rm --no-deps paper pause
+docker compose -p restauracion run --rm --no-deps paper report
+```
+
+Verifica saldos y posiciones antes de arrancar con `docker compose -p restauracion up -d`. Las entradas permanecen pausadas hasta ejecutar `resume`; la valoración y las reglas de salida empiezan al arrancar. No sobrescribas una base abierta ni mezcles un archivo restaurado con los antiguos archivos `-wal` y `-shm`.
 
 Referencias operativas: [Compose services](https://docs.docker.com/reference/compose-file/services/) y [políticas de reinicio](https://docs.docker.com/engine/containers/start-containers-automatically/).
