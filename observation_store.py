@@ -39,6 +39,10 @@ class ObservationStore(Store):
                 provider TEXT NOT NULL, day TEXT NOT NULL, calls INTEGER NOT NULL,
                 PRIMARY KEY(provider,day)
             );
+            CREATE TABLE IF NOT EXISTS provider_pacing (
+                provider TEXT PRIMARY KEY, next_at REAL NOT NULL DEFAULT 0,
+                cooldown_until REAL NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS exit_outcomes_v5 (
                 observation_id INTEGER NOT NULL REFERENCES observations(id), horizon INTEGER NOT NULL,
                 size_usdc REAL NOT NULL, due_at REAL NOT NULL, deadline REAL NOT NULL,
@@ -48,15 +52,31 @@ class ObservationStore(Store):
             CREATE INDEX IF NOT EXISTS obs_token_time ON observations(chain,token,observed_at);
         ''')
 
-    def reserve_call(self, provider, limit, now=None):
+    def reserve_call(self, provider, limit, now=None, min_interval=0):
+        """Devuelve espera sin consumir cuota, o 0 al reservar una llamada ahora."""
         now = time.time() if now is None else now
         day = dt.datetime.fromtimestamp(now, dt.timezone.utc).date().isoformat()
         with self.db:
+            # La primera escritura serializa las comprobaciones entre procesos.
+            self.db.execute('INSERT OR IGNORE INTO provider_pacing(provider) VALUES (?)', (provider,))
+            pace = self.db.execute('SELECT * FROM provider_pacing WHERE provider=?', (provider,)).fetchone()
+            if pace['cooldown_until'] > now:
+                raise RuntimeError(provider + ': pausa indicada por el proveedor; reintentar más tarde')
+            if min_interval and pace['next_at'] > now:
+                return pace['next_at'] - now
             self.db.execute('INSERT OR IGNORE INTO usage_v5 VALUES (?,?,0)', (provider, day))
             changed = self.db.execute('UPDATE usage_v5 SET calls=calls+1 WHERE provider=? AND day=? AND calls<?',
                                       (provider, day, limit)).rowcount
             if not changed:
                 raise RuntimeError(provider + ': presupuesto diario de solicitudes agotado')
+            self.db.execute('UPDATE provider_pacing SET next_at=? WHERE provider=?', (now+min_interval, provider))
+        return 0
+
+    def set_provider_cooldown(self, provider, until):
+        with self.db:
+            self.db.execute('''INSERT INTO provider_pacing(provider,cooldown_until) VALUES (?,?)
+                ON CONFLICT(provider) DO UPDATE SET cooldown_until=MAX(cooldown_until,excluded.cooldown_until)''',
+                (provider, until))
 
     def note_token(self, chain, mint, now=None):
         now = time.time() if now is None else now

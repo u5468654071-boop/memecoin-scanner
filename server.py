@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Servicios para VPS. Exclusivamente simulación; sin wallet, firmas ni envíos."""
+import argparse
+import json
+import os
+import signal
+import sqlite3
+import sys
+import time
+from contextlib import closing
+from pathlib import Path
+
+from observation_store import ObservationStore
+from paper_trading import PaperLedger, PaperPolicy
+from providers import Jupiter, Transport
+from run_lock import ScanLock
+from service_health import heartbeat, healthy, write_json
+
+
+def env_int(name, default, lower, upper):
+    try:
+        value = int(os.environ.get(name, str(default)))
+        if not lower <= value <= upper:
+            raise ValueError
+        return value
+    except ValueError:
+        raise ValueError(name + ' fuera del intervalo permitido') from None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Servidor de escaneo y cartera ficticia; no opera dinero real')
+    parser.add_argument('command', choices=('scan', 'paper', 'report', 'health', 'pause', 'resume', 'close-all', 'backup'))
+    parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
+    parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
+    parser.add_argument('--service', choices=('scanner', 'paper'), default='paper')
+    parser.add_argument('--cycles', type=int, default=0, help='Solo pruebas acotadas; 0 es continuo')
+    parser.add_argument('--backup-to', type=Path)
+    args = parser.parse_args(argv)
+    if args.cycles < 0:
+        parser.error('cycles debe ser >=0')
+    root = args.data_dir
+    db_path = root / 'scanner.sqlite3'
+    pause_path, close_path = root / 'PAUSE', root / 'CLOSE_ALL'
+    if args.command == 'health':
+        return 0 if healthy(root / (args.service + '.heartbeat.json')) else 1
+    root.mkdir(parents=True, exist_ok=True)
+    if args.command in ('pause', 'close-all'):
+        pause_path.touch(mode=0o600)
+        if args.command == 'close-all':
+            close_path.touch(mode=0o600)
+        print('Entradas ficticias pausadas. Las salidas siguen revisándose.' if args.command == 'pause'
+              else 'Cierre ficticio solicitado; las posiciones sin ruta seguirán pendientes. Entradas pausadas.')
+        return 0
+    if args.command == 'resume':
+        if close_path.exists():
+            with ObservationStore(db_path) as store:
+                if PaperLedger(store).open_positions():
+                    print('Quedan posiciones pendientes del cierre manual. Consulta report antes de reanudar.', file=sys.stderr)
+                    return 2
+            close_path.unlink(missing_ok=True)
+        pause_path.unlink(missing_ok=True)
+        print('Entradas ficticias habilitadas; siguen sujetos a filtros y límites.')
+        return 0
+    if args.command == 'backup':
+        if args.backup_to is None or not db_path.exists():
+            parser.error('backup necesita una base existente y --backup-to RUTA_NUEVA')
+        destination = args.backup_to
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            destination.touch(mode=0o600, exist_ok=False)
+            with closing(sqlite3.connect(db_path)) as source, closing(sqlite3.connect(destination)) as target:
+                source.backup(target)
+        except FileExistsError:
+            parser.error('El destino ya existe; se conserva sin sobrescribir')
+        print('Copia SQLite consistente creada: ' + str(destination))
+        return 0
+    if args.command == 'report':
+        with ObservationStore(db_path) as store:
+            account = PaperLedger(store).report()
+            if account.get('initialized'):
+                account = PaperLedger(store, PaperPolicy(**account['policy'])).report(paused=pause_path.exists() or close_path.exists())
+            account['services'] = {name: {'recent_progress': healthy(root / (name + '.heartbeat.json'))}
+                                   for name in ('scanner', 'paper')}
+            account['pause_requested'], account['close_all_requested'] = pause_path.exists(), close_path.exists()
+            print(json.dumps(account, ensure_ascii=False, indent=2, allow_nan=False))
+        return 0
+    try:
+        policy = PaperPolicy.load(args.policy)
+        daily = env_int('DAILY_API_LIMIT', 20000, 100, 1000000)
+        reserve = env_int('EXIT_API_RESERVE', 5000, 1, daily-1)
+        scan_interval = env_int('SCAN_INTERVAL_SECONDS', 60, 10, 300)
+        paper_interval = env_int('PAPER_INTERVAL_SECONDS', 60, 10, 60)
+        max_tokens = env_int('SCAN_MAX_TOKENS', 3, 1, 20)
+        if not os.environ.get('JUPITER_API_KEY', '').strip():
+            raise ValueError('Falta JUPITER_API_KEY en el entorno del servicio')
+    except (ValueError, OSError) as exc:
+        print(str(exc) if isinstance(exc, ValueError) else 'No se puede leer el archivo de política', file=sys.stderr)
+        return 2
+    if args.command == 'scan':
+        from scanner_v05 import main as scan
+        return scan(['--watch', '--with-stream', '--interval', str(scan_interval), '--cycles', str(args.cycles),
+                     '--max-tokens', str(max_tokens), '--limit', str(max_tokens),
+                     '--candidates', 'boosted,profiles,jupiter', '--sizes-usdc', str(policy.order_usdc),
+                     '--daily-api-limit', str(daily-reserve), '--db', str(db_path),
+                     '--log', str(root / 'scan_log.csv'), '--json-output', str(root / 'scanner-report.json'),
+                     '--heartbeat', str(root / 'scanner.heartbeat.json')])
+    lock = ScanLock(str(db_path) + '.paper')
+    acquired = False
+    try:
+        lock.acquire()
+        acquired = True
+        with ObservationStore(db_path) as store:
+            ledger = PaperLedger(store, policy)
+            jupiter = Jupiter(Transport(store, daily))
+            cycle = 0
+            while True:
+                start = time.monotonic()
+                heartbeat(root / 'paper.heartbeat.json', 'valuing')
+                report = ledger.tick(jupiter, paused=pause_path.exists, close_all=close_path.exists)
+                report['scanner_recent_progress'] = healthy(root / 'scanner.heartbeat.json')
+                write_json(root / 'paper-report.json', report)
+                heartbeat(root / 'paper.heartbeat.json', 'waiting')
+                print(json.dumps({'mode': 'paper_only', 'cash_usdc': report['cash_usdc'],
+                                  'equity_usdc': report['equity_usdc'], 'open_positions': len(report['open_positions']),
+                                  'entry_blockers': report['entry_blockers']}, ensure_ascii=False), flush=True)
+                cycle += 1
+                if args.cycles and cycle >= args.cycles:
+                    return 0
+                time.sleep(max(0, paper_interval-(time.monotonic()-start)))
+    except KeyboardInterrupt:
+        return 0
+    except (RuntimeError, ValueError, sqlite3.Error) as exc:
+        print(str(exc) if isinstance(exc, (RuntimeError, ValueError)) else 'Error SQLite: ' + type(exc).__name__, file=sys.stderr)
+        return 2
+    finally:
+        lock.close()
+        if acquired:
+            heartbeat(root / 'paper.heartbeat.json', 'stopped')
+
+
+def stop_service(_signum, _frame):
+    raise KeyboardInterrupt
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, stop_service)
+    sys.exit(main())
