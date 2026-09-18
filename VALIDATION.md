@@ -1,27 +1,28 @@
-# Validación v0.6.0 — servidor y simulación
+# Validación v0.7.0 — tres perfiles de simulación
 
-Fecha: 18 de septiembre de 2026. Base: `main` en `e59edec`. Los resultados de investigación previos se conservan en [VALIDATION_V051.md](docs/VALIDATION_V051.md).
+18 de septiembre de 2026. Base de implementación: `main` en `cda7736`. La validación anterior se conserva en [VALIDATION_V060.md](docs/VALIDATION_V060.md).
 
-## Comprobado localmente
+## Pruebas reproducibles
 
-- 126 pruebas automáticas aprobadas en Python 3.9.6, con `websockets==15.0.1`; no necesitan claves ni servicios externos. Incluyen el servidor WebSocket local.
-- Entradas ficticias con cotizaciones nuevas, identidad y cantidad exactas, señales caducadas/futuras, política y versión.
-- Contabilidad en micro-USDC, slippage/comisiones hipotéticos, persistencia tras reinicios y rechazo de cambios de política sobre la misma cartera.
-- Límites de posiciones, saldo, pérdidas realizadas/abiertas, señales duplicadas y pausa que llega durante una consulta.
-- Salidas por stop, objetivo, trailing, tiempo, invalidación y cierre manual. Salto de precio cerrado a la cotización observada, no al precio del umbral.
-- Ruta ausente: posición abierta, capital comprometido, valoración desconocida y posterior recuperación sin duplicar saldo.
-- Rollback de posiciones y saldo ante fallo de escritura; copia consistente de SQLite y rechazo de sobrescrituras.
-- Cuotas y separación entre consultas compartidas entre conexiones; pausas persistentes del proveedor y reserva de cuota para simulación.
-- Bucle acotado de servicio, reinicio sin reinicializar capital, controles locales sin red y salud caducada/futura/detenida.
+167 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni servicios externos; la conexión WebSocket usa un servidor local. Ejecutar:
 
-## Comprobado en GitHub
+```bash
+python -m unittest discover -s tests -v
+```
 
-Las ocho comprobaciones del commit `2ad6ed3` han pasado (eventos push y pull_request): 126 tests en Python 3.9, 3.12 y 3.13, validación de Compose, construcción de la imagen, tests dentro del contenedor sin privilegios y dos arranques acotados con la misma cartera persistente. El código publicado coincidía exactamente con los archivos locales probados (árbol `ae962298c1767b3d25754304a8f05560ab9c90eb`).
+Se conservan las 138 comprobaciones anteriores y se añaden 29 para:
 
-Evidencia: [ejecución de CI](https://github.com/u5468654071-boop/memecoin-scanner/actions/runs/35359764670) y [job del contenedor](https://github.com/u5468654071-boop/memecoin-scanner/actions/runs/35359764670/job/105647850683). La comprobación Docker se hizo en GitHub; no hay Docker Engine en la máquina de desarrollo. La prueba del contenedor usa una clave ficticia y una cartera vacía, sin consultas externas.
+- Aislamiento de decisiones, umbrales distintos, confirmación temporal por plan y tamaño, datos críticos ausentes y rechazo de riesgos en los tres perfiles.
+- Una única recogida de evidencia por observación, cotizaciones por tamaño solo tras las comprobaciones previas y trabajo histórico acotado.
+- Distribución 600+300+100, reinicios sin duplicar saldo, migración sin actividad y bloqueo si hubo movimientos o cambia el plan.
+- Límites compartidos de exposición y pérdidas, todas las salidas antes de cualquier entrada y revisión del límite después de consultar la red.
+- Salidas sin ruta, recuperación, pausa, invalidación por perfil, rollback de débito y posiciones, y controles que abarcan las tres carteras.
+- Avisos con IDs independientes y activación única; informes por perfil y separación de cohortes por la huella del plan.
 
-## Pendiente en esta entrega
+La CI de esta versión ejecuta Python 3.9, 3.12 y 3.13 y una prueba Docker con dos arranques sobre el mismo volumen, para comprobar persistencia del reparto. Consultar [Actions](https://github.com/u5468654071-boop/memecoin-scanner/actions) para el resultado del commit publicado; la existencia del workflow no implica que ya haya pasado.
 
-El despliegue y reinicio reales del VPS necesitan su acceso SSH y la configuración local de la clave Jupiter.
+## Alcance
 
-No se ha probado Jupiter autenticado en vivo ni obtenido una serie prospectiva de compras/ventas ficticias reales. Los tests usan cotizaciones sintéticas. No hay órdenes, firmas, wallet ni ejecución con dinero real. Los resultados no demuestran rentabilidad.
+Los tests de lógica usan mercados y cotizaciones sintéticos. El funcionamiento operativo se verifica por separado en el VPS: copia consistente, tres servicios, capital agregado, perfil de cada observación y entrega del aviso de activación. Los resultados en vivo se conservan en el volumen privado, no en este repositorio.
+
+No se ha demostrado rentabilidad, superioridad de filtros ni ejecución real. Los perfiles comparten universo y límites; sus retornos no son ensayos independientes. Se necesita historial prospectivo suficiente y declarar cotizaciones ausentes, costes supuestos y períodos sin valoración. El sistema sigue siendo exclusivamente de simulación.

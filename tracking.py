@@ -65,12 +65,13 @@ class Store:
                     (observation_id, horizon, due_at, deadline, status) VALUES (?, ?, ?, ?, ?)""",
                     (cursor.lastrowid, horizon, due, deadline, status))
 
-    def evaluate_due(self, fetch, now=None):
+    def evaluate_due(self, fetch, now=None, max_tasks=None):
         from memecoin_scanner import DEX_BASE, number, obj, same_address
         current_time = (lambda: now) if now is not None else time.time
         tasks = self.db.execute("""SELECT o.*, t.horizon, t.deadline FROM outcomes t
             JOIN observations o ON o.id=t.observation_id
-            WHERE t.status='pending' AND t.due_at<=? ORDER BY t.deadline""", (current_time(),)).fetchall()
+            WHERE t.status='pending' AND t.due_at<=? ORDER BY t.deadline LIMIT ?""",
+                                (current_time(), -1 if max_tasks is None else max_tasks)).fetchall()
         cache = {}
         for task in tasks:
             checked = current_time()
@@ -131,6 +132,7 @@ class Store:
         for row in rows:
             payload = json.loads(row["payload"])
             cohort = json.dumps({"version": payload.get("scanner_version"), "policy": payload.get("policy"),
+                                 "profile_plan_hash": payload.get("profile_plan_hash"),
                                  "enhanced_policy": payload.get("enhanced_policy"),
                                  "baseline_v04_policy": payload.get("baseline_v04_policy"),
                                  "sizes_usdc": sorted(q['amount_usdc'] for q in payload.get('exit_quotes', []))},

@@ -1,12 +1,16 @@
-# Memecoin Scanner v0.6.0
+# Memecoin Scanner v0.7.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 138 pruebas automáticas. Incluye una cartera exclusivamente ficticia, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
+Estado: versión de investigación, con 167 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
-La revisión 0.5.1 exige un tramo continuo de observaciones válidas, detecta retiradas de liquidez desde máximos intermedios y separa los informes por versión, política y tamaños solicitados. Los históricos 0.5.0 se conservan, pero no cuentan como confirmación de las nuevas decisiones.
+La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detecta retiradas de liquidez desde máximos intermedios y separa los informes por versión, política y tamaños solicitados. Los históricos 0.5.0 se conservan, pero no cuentan como confirmación de las nuevas decisiones.
+
+## Tres perfiles en el VPS
+
+[Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
 
 ## Arranque rápido
 
@@ -74,9 +78,9 @@ Un cambio de pool no reinicia las fechas conocidas del token. La trayectoria de 
 
 ## Decisión y ranking
 
-La referencia v0.4 se conserva para comparar resultados en el mismo universo. La v0.5 quita el veto fijo de 30 minutos y exige evidencia temporal en su lugar. `--min-age-hours` afecta a la referencia v0.4; el criterio temporal de v0.5 se ajusta con `--min-observation-seconds` y `--min-samples`.
+La referencia v0.4 se conserva para comparar resultados en el mismo universo. La v0.5 quita el veto fijo de 30 minutos y exige evidencia temporal en su lugar. Sin `--profiles`, `--min-age-hours` afecta a la referencia v0.4; el criterio temporal de v0.5 se ajusta con `--min-observation-seconds` y `--min-samples`.
 
-Por defecto, además de los filtros de mercado heredados:
+En el CLI sin perfiles, además de los filtros de mercado heredados:
 
 - Tres snapshots válidos separados al menos 60 segundos y que abarquen al menos 180 segundos, del mismo token, pool, versión y política. Un hueco mayor que `--data-max-age-seconds` (300 por defecto) interrumpe la confirmación; solo se mira la última media hora.
 - Actualizaciones de Jupiter distintas, no repetir la misma respuesta en caché.
@@ -122,7 +126,7 @@ python3 memecoin_scanner.py --report
 
 `--watch` ya ejecuta la evaluación mientras está abierto. Fuera del bucle, ejecuta `--evaluate` durante las ventanas de vencimiento. No puede recuperar una cotización histórica que no se consultó a tiempo.
 
-El reporte compara selección v0.5, referencia v0.4 y referencia sencilla de liquidez/actividad sobre las mismas observaciones. Separa versiones, políticas, conjunto de tamaños solicitado, selección/descarte, horizonte y tamaño. Muestra cobertura y tokens únicos. Mantiene casos sin datos (`untrackable`), plazos perdidos (`missed`) y errores pendientes; no les inventa un retorno cero.
+El reporte compara selección v0.5, referencia v0.4 y referencia sencilla de liquidez/actividad sobre las mismas observaciones. Separa versiones, políticas, huella del plan, perfiles, conjunto de tamaños solicitado, selección/descarte, horizonte y tamaño. Muestra cobertura y tokens únicos. Mantiene casos sin datos (`untrackable`), plazos perdidos (`missed`) y errores pendientes; no les inventa un retorno cero.
 
 La medición de salida publica un escenario estresado: por defecto descuenta 100 puntos básicos del importe de salida y 0,10 USDC adicionales del resultado. Son **supuestos**, configurables con `--exit-stress-bps` y `--fixed-cost-usdc`; no representan una estimación exacta de gas, slippage o MEV. Las comisiones embebidas en una cotización no deben restarse de nuevo como si no estuvieran incluidas. Las medianas de retornos observables aún pueden sufrir sesgo de supervivencia.
 

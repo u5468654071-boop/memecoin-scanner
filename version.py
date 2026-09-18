@@ -1,3 +1,3 @@
 """Versión de las decisiones; separa históricos al cambiar el algoritmo."""
 
-SCANNER_VERSION = '0.6.0'
+SCANNER_VERSION = '0.7.0'

@@ -45,7 +45,7 @@ def build_parser():
     parser.add_argument('--version', action='version', version=SCANNER_VERSION)
     parser.add_argument('--chain', choices=('solana', 'base', 'ethereum'), default='solana')
     parser.add_argument('--tokens', help='Direcciones separadas por coma')
-    parser.add_argument('--candidates', default='boosted,profiles', help='boosted,profiles,jupiter; vacío para solo pendientes')
+    parser.add_argument('--candidates', default='boosted,profiles', help='boosted,profiles,jupiter,jupiter-organic; vacío para solo pendientes')
     parser.add_argument('--search', action='append', default=[])
     parser.add_argument('--limit', type=int, default=10)
     parser.add_argument('--max-tokens', type=int, default=20)
@@ -56,6 +56,7 @@ def build_parser():
     parser.add_argument('--log', type=Path, default=Path('data/scan_log_v05.csv'))
     parser.add_argument('--json-output', type=Path, default=Path('data/latest_v05.json'))
     parser.add_argument('--heartbeat', type=Path, help='Estado local de progreso para supervisión del servicio')
+    parser.add_argument('--profiles', type=Path, help='Plan experimental de tres perfiles sobre los mismos datos')
     parser.add_argument('--quality-filter', action='store_true', help='Compatibilidad: el filtro está siempre activo')
     for key, value in asdict(legacy.Policy()).items():
         parser.add_argument('--' + key.replace('_', '-'), type=float, default=value,
@@ -89,10 +90,17 @@ def main(argv=None):
     if args.watch and (args.stream or args.report or args.evaluate or args.alerts):
         parser.error('--watch no se combina con report/evaluate/alerts/stream; usa --with-stream')
     sources = list(dict.fromkeys(s.strip() for s in args.candidates.split(',') if s.strip()))
-    if any(s not in ('boosted', 'profiles', 'jupiter') for s in sources):
-        parser.error('fuentes admitidas: boosted,profiles,jupiter')
+    if any(s not in ('boosted', 'profiles', 'jupiter', 'jupiter-organic') for s in sources):
+        parser.error('fuentes admitidas: boosted,profiles,jupiter,jupiter-organic')
     policy = legacy.Policy(**{k: getattr(args, k) for k in asdict(legacy.Policy())})
     enhanced = EnhancedPolicy(**{k: getattr(args, k) for k in asdict(EnhancedPolicy())})
+    profile_plan = None
+    if args.profiles:
+        from profile_plan import ProfilePlan
+        try:
+            profile_plan = ProfilePlan.load(args.profiles)
+        except (OSError, ValueError):
+            parser.error('No se puede cargar el plan de perfiles')
     for k, value in {**asdict(policy), **asdict(enhanced)}.items():
         if not math.isfinite(value) or (k != 'min_price_change_h1' and value < 0):
             parser.error('umbrales inválidos')
@@ -111,6 +119,8 @@ def main(argv=None):
             raise ValueError
     except (ValueError, argparse.ArgumentTypeError):
         parser.error('sizes-usdc: entre uno y tres tamaños positivos, máximo 1.000.000 USDC y seis decimales')
+    if profile_plan:
+        sizes = profile_plan.sizes
     manual = None
     if args.tokens is not None:
         manual = list(dict.fromkeys(t.strip() for t in args.tokens.split(',') if t.strip()))
@@ -149,10 +159,10 @@ def main(argv=None):
             except ValueError as exc:
                 parser.error(str(exc))
             legacy.CLIENT = transport
-            engine = Engine(store, transport, policy, enhanced, sizes)
+            engine = Engine(store, transport, policy, enhanced, sizes, profile_plan=profile_plan)
             if args.evaluate:
-                store.evaluate_due(transport.get)
-                store.evaluate_exits(engine.jupiter)
+                store.evaluate_due(transport.get, max_tasks=2 if profile_plan else None)
+                store.evaluate_exits(engine.jupiter, max_tasks=2 if profile_plan else None)
                 print(json.dumps(store.report_enhanced(), ensure_ascii=False, indent=2))
                 return 0
             if not engine.jupiter.enabled:
@@ -175,24 +185,35 @@ def main(argv=None):
                 start = time.monotonic()
                 heartbeat(args.heartbeat, 'evaluating')
                 # El seguimiento se atiende antes del siguiente lote de análisis.
-                store.evaluate_due(transport.get)
-                store.evaluate_exits(engine.jupiter)
+                store.evaluate_due(transport.get, max_tasks=2 if profile_plan else None)
+                store.evaluate_exits(engine.jupiter, max_tasks=2 if profile_plan else None)
                 heartbeat(args.heartbeat, 'discovering')
                 errors = []
                 if manual is not None:
                     provenance = {mint: ['manual'] for mint in manual}
                 else:
-                    found, errors = legacy.gather_candidates(args.chain, [s for s in sources if s != 'jupiter'], args.limit, args.search)
+                    found, errors = legacy.gather_candidates(args.chain, [s for s in sources if s not in ('jupiter', 'jupiter-organic')], args.limit, args.search)
                     if 'jupiter' in sources and args.chain == 'solana':
                         try:
                             for mint in engine.jupiter.discover(args.limit):
                                 found.setdefault(mint, []).append('jupiter_recent')
                         except RuntimeError as exc:
                             errors.append(str(exc))
+                    if 'jupiter-organic' in sources and args.chain == 'solana':
+                        try:
+                            organic = engine.jupiter.discover_organic(args.limit)
+                            # Alternar prioridad de actividad y novedades; ninguna lista valida por sí sola un token.
+                            merged = {mint: list(dict.fromkeys(found.get(mint, []) + ['jupiter_organic'])) for mint in organic}
+                            for mint, origin in found.items():
+                                merged.setdefault(mint, origin)
+                            found = merged if cycle % 2 == 0 else {**found, **merged}
+                        except RuntimeError as exc:
+                            errors.append(str(exc))
                     for mint in found:
                         store.note_token(args.chain, mint)
                     # Reservar al menos la mitad de cada lote a la cola más antigua.
-                    pending = store.due_tokens(args.chain, args.max_tokens, interval=args.interval)
+                    pending = store.due_tokens(args.chain, args.max_tokens, interval=args.interval,
+                                               prioritize_observing=profile_plan is not None)
                     provenance = {}
                     queues = [(mint, ['watchlist']) for mint in pending]
                     fresh = [(mint, source) for mint, source in found.items()
@@ -212,8 +233,8 @@ def main(argv=None):
                     rows.append(row)
                     heartbeat(args.heartbeat, 'evaluating')
                     # Evitar que un escaneo largo abandone todos los plazos de evaluación.
-                    store.evaluate_due(transport.get)
-                    store.evaluate_exits(engine.jupiter)
+                    store.evaluate_due(transport.get, max_tasks=2 if profile_plan else None)
+                    store.evaluate_exits(engine.jupiter, max_tasks=2 if profile_plan else None)
                 rows.sort(key=lambda r: (not r['quality_pass'], -(r['research_score'] or 0), r['base_address']))
                 legacy.log_results(rows, args.log)
                 result = {'scanner_version': SCANNER_VERSION, 'run_id': run_id, 'source_errors': errors,

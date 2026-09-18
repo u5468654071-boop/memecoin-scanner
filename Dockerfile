@@ -5,7 +5,7 @@ RUN groupadd --gid 10001 scanner && useradd --uid 10001 --gid scanner --no-creat
     && mkdir /data && chown scanner:scanner /data
 COPY requirements-stream.txt .
 RUN pip install --no-cache-dir -r requirements-stream.txt
-COPY *.py paper-policy.json ./
+COPY *.py paper-policy.json profiles.json ./
 COPY tests/ ./tests/
 USER 10001:10001
 STOPSIGNAL SIGINT

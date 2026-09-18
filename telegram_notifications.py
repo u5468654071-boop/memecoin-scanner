@@ -172,6 +172,7 @@ class Notifications:
         # Leer la cartera sin crearla ni modificarla; la cola tiene su propia base.
         ledger = self.root / 'scanner.sqlite3'
         positions = []
+        portfolio = None
         if ledger.exists():
             source = sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
             source.row_factory = sqlite3.Row
@@ -180,13 +181,29 @@ class Notifications:
                     positions = source.execute('''SELECT * FROM paper_positions
                         WHERE state='open' OR opened_at>=? OR closed_at>=? ORDER BY opened_at,id''',
                         (binding['created_at'], binding['created_at'])).fetchall()
+                    positions = [dict(p) for p in positions]
+                if source.execute("SELECT 1 FROM sqlite_master WHERE name='portfolio_config'").fetchone():
+                    config = source.execute('SELECT digest,plan FROM portfolio_config WHERE id=1').fetchone()
+                    if config:
+                        portfolio = (config['digest'], json.loads(config['plan']))
+                        for ident, label in (('conservative', 'Conservador'), ('balanced', 'Equilibrado'), ('aggressive', 'Agresivo')):
+                            rows = source.execute(f'''SELECT * FROM paper_{ident}_positions
+                                WHERE state='open' OR opened_at>=? OR closed_at>=? ORDER BY opened_at,id''',
+                                (binding['created_at'], binding['created_at'])).fetchall()
+                            positions.extend({**dict(p), 'profile': ident, 'profile_label': label} for p in rows)
             finally:
                 source.close()
         with self.db:
+            if portfolio:
+                digest, plan = portfolio
+                amounts = '\n'.join(p['label'] + ': %.0f USDC virtuales; %.2f por entrada' %
+                                      (p['paper']['initial_usdc'], p['paper']['order_usdc']) for p in plan['profiles'])
+                self.queue('profiles:' + digest[:12], 'SIMULACIÓN · TRES PERFILES ACTIVOS\n' + amounts
+                           + '\nLos resultados se contabilizan por separado. Se aplican límites conjuntos de exposición.', now)
             for pos in positions:
-                ident = str(pos['id'])
+                ident = (pos['profile'] + ':' if pos.get('profile') else '') + str(pos['id'])
                 mint = pos['mint'] if valid_address('solana', pos['mint']) else 'dirección inválida'
-                label = 'Token: ' + mint + '\nPosición: ' + ident
+                label = ('Perfil: ' + pos['profile_label'] + '\n' if pos.get('profile') else '') + 'Token: ' + mint + '\nPosición: ' + ident
                 if pos['state'] == 'open' or pos['opened_at'] >= binding['created_at']:
                     self.queue('open:' + ident, 'SIMULACIÓN · APERTURA\n' + label
                         + '\nCoste ficticio: %.2f USDC\nMotivo: filtros de entrada y cotización aceptados.\n' % (pos['cost_micro']/1e6)

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "total_initial_usdc": 1000,
+  "max_total_exposure_usdc": 180,
+  "max_token_exposure_usdc": 70,
+  "daily_loss_limit_usdc": 30,
+  "profiles": [
+    {
+      "id": "conservative", "label": "Conservador",
+      "market": {"min_age_hours": 1, "max_age_hours": 168, "min_liquidity": 100000, "min_lp_locked_pct": 95, "max_rugcheck_score": 15, "min_txns_h1": 100, "min_sells_h1": 20, "min_volume_h1": 10000, "max_fdv_liquidity": 20, "max_volume_liquidity_h1": 3, "max_price_change_h1": 40, "min_price_change_h1": -10, "max_market_score": 2},
+      "enhanced": {"min_organic_score": 60, "max_owner_pct": 10, "max_top10_pct": 35, "max_network_pct": 15, "max_round_trip_loss_pct": 2, "min_observation_seconds": 600, "min_samples": 5, "min_organic_buyers_5m": 20, "max_liquidity_drop_pct": 8, "data_max_age_seconds": 300},
+      "paper": {"initial_usdc": 600, "order_usdc": 50, "max_positions": 2, "stop_loss_pct": 12, "take_profit_pct": 24, "trailing_stop_pct": 8, "trailing_activation_pct": 15, "max_hold_seconds": 14400, "daily_loss_limit_usdc": 15, "reentry_cooldown_seconds": 7200}
+    },
+    {
+      "id": "balanced", "label": "Equilibrado",
+      "market": {"min_age_hours": 0.25, "max_age_hours": 72, "min_liquidity": 50000, "min_lp_locked_pct": 90, "max_rugcheck_score": 25, "min_txns_h1": 50, "min_sells_h1": 10, "min_volume_h1": 5000, "max_fdv_liquidity": 40, "max_volume_liquidity_h1": 5, "max_price_change_h1": 80, "min_price_change_h1": -15, "max_market_score": 3},
+      "enhanced": {"min_organic_score": 40, "max_owner_pct": 15, "max_top10_pct": 45, "max_network_pct": 20, "max_round_trip_loss_pct": 3, "min_observation_seconds": 180, "min_samples": 3, "min_organic_buyers_5m": 10, "max_liquidity_drop_pct": 12, "data_max_age_seconds": 300},
+      "paper": {"initial_usdc": 300, "order_usdc": 25, "max_positions": 2, "stop_loss_pct": 18, "take_profit_pct": 36, "trailing_stop_pct": 12, "trailing_activation_pct": 20, "max_hold_seconds": 7200, "daily_loss_limit_usdc": 10, "reentry_cooldown_seconds": 3600}
+    },
+    {
+      "id": "aggressive", "label": "Agresivo",
+      "market": {"min_age_hours": 0.03333333333333333, "max_age_hours": 24, "min_liquidity": 20000, "min_lp_locked_pct": 80, "max_rugcheck_score": 30, "min_txns_h1": 30, "min_sells_h1": 5, "min_volume_h1": 1000, "max_fdv_liquidity": 60, "max_volume_liquidity_h1": 8, "max_price_change_h1": 150, "min_price_change_h1": -20, "max_market_score": 4},
+      "enhanced": {"min_organic_score": 20, "max_owner_pct": 20, "max_top10_pct": 60, "max_network_pct": 30, "max_round_trip_loss_pct": 4, "min_observation_seconds": 60, "min_samples": 2, "min_organic_buyers_5m": 5, "max_liquidity_drop_pct": 20, "data_max_age_seconds": 300},
+      "paper": {"initial_usdc": 100, "order_usdc": 10, "max_positions": 2, "stop_loss_pct": 25, "take_profit_pct": 50, "trailing_stop_pct": 18, "trailing_activation_pct": 25, "max_hold_seconds": 3600, "daily_loss_limit_usdc": 5, "slippage_bps": 100, "reentry_cooldown_seconds": 3600}
+    }
+  ]
+}

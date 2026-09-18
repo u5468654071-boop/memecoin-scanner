@@ -76,3 +76,7 @@ Conserva esa copia de manera privada. Una restauración antigua puede reenviar a
 Validación añadida: 12 pruebas sin red para vinculación, caducidad, rechazo de grupos/repeticiones, cola atómica, reinicios, aperturas/cierres entre consultas, avisos por cambio, espera de errores 429 y redacción de errores. La suite completa suma 138 pruebas.
 
 Referencias: [Bot API](https://core.telegram.org/bots/api#sendmessage), [vinculación mediante enlaces](https://core.telegram.org/bots/features#deep-linking).
+
+## Tres perfiles (v0.7.0)
+
+Al activar el plan se envía una confirmación única con las asignaciones de 600/300/100 USDC virtuales. Cada apertura, cierre o incidencia identifica Conservador, Equilibrado o Agresivo; las referencias son distintas por cartera. La vinculación existente y la cola persisten al actualizar. Los avisos se generan a partir de la contabilidad de simulación, sin operar una wallet.
