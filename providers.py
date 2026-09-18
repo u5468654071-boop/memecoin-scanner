@@ -66,7 +66,7 @@ class Transport:
               and parsed.port in (None, 443) and payload is None):
             provider = {'api.dexscreener.com': 'dexscreener', 'api.rugcheck.xyz': 'rugcheck',
                         'api.jup.ag': 'jupiter'}.get(parsed.hostname)
-            if provider == 'jupiter' and parsed.path not in ('/tokens/v2/search', '/tokens/v2/recent', '/swap/v2/order'):
+            if provider == 'jupiter' and parsed.path not in ('/tokens/v2/search', '/tokens/v2/recent', '/tokens/v2/toporganicscore/5m', '/swap/v2/order'):
                 raise RuntimeError('Endpoint Jupiter no permitido')
         else:
             provider = None
@@ -291,6 +291,13 @@ class Jupiter:
         if not isinstance(data, list):
             raise RuntimeError('Jupiter: lista inválida')
         return [item['id'] for item in data if isinstance(item, dict) and valid_address('solana', item.get('id'))][:limit]
+
+    def discover_organic(self, limit):
+        data = self.transport.get('https://api.jup.ag/tokens/v2/toporganicscore/5m?' + urlencode({'limit': limit}))
+        if not isinstance(data, list):
+            raise RuntimeError('Jupiter: lista de actividad orgánica inválida')
+        return list(dict.fromkeys(item['id'] for item in data
+                    if isinstance(item, dict) and valid_address('solana', item.get('id'))))[:limit]
 
     def token(self, mint, now=None, max_age=300):
         now = time.time() if now is None else now

@@ -157,12 +157,13 @@ class ObservationStore(Store):
         pause = max(interval, 900 if row['state'] == 'rejected' else (300 if row['state'] == 'insufficient_data' else interval))
         return row['last_scanned'] <= now - pause
 
-    def due_tokens(self, chain, limit, now=None, interval=60, max_watch_hours=72):
+    def due_tokens(self, chain, limit, now=None, interval=60, max_watch_hours=72, prioritize_observing=False):
         now = time.time() if now is None else now
-        entries = self.db.execute("""SELECT mint FROM tokens_v5 WHERE chain=? AND first_seen>=?
+        priority = "CASE WHEN state IN ('candidate','observing') THEN 0 ELSE 1 END," if prioritize_observing else ''
+        entries = self.db.execute(f"""SELECT mint FROM tokens_v5 WHERE chain=? AND first_seen>=?
             AND (last_scanned IS NULL OR last_scanned<=? - CASE WHEN state='rejected' THEN ?
                  WHEN state='insufficient_data' THEN ? ELSE ? END)
-            ORDER BY COALESCE(last_scanned,0), first_seen LIMIT ?""",
+            ORDER BY {priority} COALESCE(last_scanned,0), first_seen LIMIT ?""",
             (chain, now - max_watch_hours * 3600, now, max(interval,900), max(interval,300), interval, limit)).fetchall()
         return [r['mint'] for r in entries]
 
@@ -231,12 +232,12 @@ class ObservationStore(Store):
         with self.db:
             self.db.execute('UPDATE stream_gaps_v5 SET ended_at=? WHERE id=?', (time.time() if now is None else now, gap_id))
 
-    def evaluate_exits(self, jupiter, now=None):
+    def evaluate_exits(self, jupiter, now=None, max_tasks=None):
         clock = (lambda: now) if now is not None else time.time
         tasks = self.db.execute('''SELECT e.*,o.token,o.payload AS entry FROM exit_outcomes_v5 e
             JOIN observations o ON o.id=e.observation_id WHERE e.status='pending' AND e.due_at<=?
-            AND (e.checked_at IS NULL OR e.checked_at<=? OR e.deadline<?) ORDER BY e.deadline''',
-            (clock(), clock() - 60, clock())).fetchall()
+            AND (e.checked_at IS NULL OR e.checked_at<=? OR e.deadline<?) ORDER BY e.deadline LIMIT ?''',
+            (clock(), clock() - 60, clock(), -1 if max_tasks is None else max_tasks)).fetchall()
         for task in tasks:
             checked, status, gross, stressed, detail = clock(), 'pending', None, None, {}
             if checked > task['deadline']:
@@ -285,11 +286,15 @@ class ObservationStore(Store):
         for row in data:
             entry = json.loads(row['entry'])
             policy = json.dumps({'version': entry.get('scanner_version'), 'market': entry['policy'],
+                                 'profile_plan_hash': entry.get('profile_plan_hash'),
                                  'enhanced': entry['enhanced_policy'],
                                  'sizes_usdc': sorted(q['amount_usdc'] for q in entry.get('exit_quotes', [])),
                                  'baseline_v04': entry.get('baseline_v04_policy')}, sort_keys=True)
-            for name, selected in [('v05', entry['quality_pass']), ('v04_baseline', entry.get('baseline_v04_pass', False)),
-                                   ('liquidity_activity_baseline', entry.get('simple_baseline_pass', False))]:
+            selectors = [('v05', entry['quality_pass']), ('v04_baseline', entry.get('baseline_v04_pass', False)),
+                         ('liquidity_activity_baseline', entry.get('simple_baseline_pass', False))]
+            selectors.extend((ident, result['quality_pass']) for ident, result in entry.get('profiles', {}).items()
+                             if any(q['amount_usdc'] == row['size_usdc'] for q in result['exit_quotes']))
+            for name, selected in selectors:
                 key = (policy, name, bool(selected), row['horizon'], row['size_usdc'])
                 buckets.setdefault(key, []).append(row)
         groups = []

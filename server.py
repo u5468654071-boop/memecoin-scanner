@@ -12,6 +12,8 @@ from pathlib import Path
 
 from observation_store import ObservationStore
 from paper_trading import PaperLedger, PaperPolicy
+from profile_plan import ProfilePlan
+from profile_portfolio import ProfilePortfolio, active_plan
 from providers import Jupiter, Transport
 from run_lock import ScanLock
 from service_health import heartbeat, healthy, write_json
@@ -32,6 +34,7 @@ def main(argv=None):
     parser.add_argument('command', choices=('scan', 'paper', 'report', 'health', 'pause', 'resume', 'close-all', 'backup'))
     parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
     parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
+    parser.add_argument('--profiles', type=Path, default=os.environ.get('PAPER_PROFILES_FILE'))
     parser.add_argument('--service', choices=('scanner', 'paper'), default='paper')
     parser.add_argument('--cycles', type=int, default=0, help='Solo pruebas acotadas; 0 es continuo')
     parser.add_argument('--backup-to', type=Path)
@@ -54,7 +57,9 @@ def main(argv=None):
     if args.command == 'resume':
         if close_path.exists():
             with ObservationStore(db_path) as store:
-                if PaperLedger(store).open_positions():
+                stored_plan = active_plan(store)
+                ledger = ProfilePortfolio(store, stored_plan) if stored_plan else PaperLedger(store)
+                if ledger.open_positions():
                     print('Quedan posiciones pendientes del cierre manual. Consulta report antes de reanudar.', file=sys.stderr)
                     return 2
             close_path.unlink(missing_ok=True)
@@ -76,16 +81,25 @@ def main(argv=None):
         return 0
     if args.command == 'report':
         with ObservationStore(db_path) as store:
-            account = PaperLedger(store).report()
-            if account.get('initialized'):
-                account = PaperLedger(store, PaperPolicy(**account['policy'])).report(paused=pause_path.exists() or close_path.exists())
+            stored_plan = active_plan(store)
+            if stored_plan:
+                account = ProfilePortfolio(store, stored_plan).report(paused=pause_path.exists() or close_path.exists())
+            else:
+                account = PaperLedger(store).report()
+                if account.get('initialized'):
+                    account = PaperLedger(store, PaperPolicy(**account['policy'])).report(paused=pause_path.exists() or close_path.exists())
             account['services'] = {name: {'recent_progress': healthy(root / (name + '.heartbeat.json'))}
                                    for name in ('scanner', 'paper')}
             account['pause_requested'], account['close_all_requested'] = pause_path.exists(), close_path.exists()
             print(json.dumps(account, ensure_ascii=False, indent=2, allow_nan=False))
         return 0
     try:
-        policy = PaperPolicy.load(args.policy)
+        plan = ProfilePlan.load(args.profiles) if args.profiles else None
+        policy = PaperPolicy.load(args.policy) if plan is None else None
+        with ObservationStore(db_path) as store:
+            persisted = active_plan(store)
+            if persisted and (plan is None or plan.digest != persisted.digest):
+                raise ValueError('El servicio necesita el mismo plan de perfiles que las carteras persistidas')
         daily = env_int('DAILY_API_LIMIT', 20000, 100, 1000000)
         reserve = env_int('EXIT_API_RESERVE', 5000, 1, daily-1)
         scan_interval = env_int('SCAN_INTERVAL_SECONDS', 60, 10, 300)
@@ -100,17 +114,19 @@ def main(argv=None):
         from scanner_v05 import main as scan
         return scan(['--watch', '--with-stream', '--interval', str(scan_interval), '--cycles', str(args.cycles),
                      '--max-tokens', str(max_tokens), '--limit', str(max_tokens),
-                     '--candidates', 'boosted,profiles,jupiter', '--sizes-usdc', str(policy.order_usdc),
+                     '--candidates', 'boosted,profiles,jupiter,jupiter-organic' if plan else 'boosted,profiles,jupiter',
+                     '--sizes-usdc', ','.join(map(str, plan.sizes)) if plan else str(policy.order_usdc),
                      '--daily-api-limit', str(daily-reserve), '--db', str(db_path),
                      '--log', str(root / 'scan_log.csv'), '--json-output', str(root / 'scanner-report.json'),
-                     '--heartbeat', str(root / 'scanner.heartbeat.json')])
+                     '--heartbeat', str(root / 'scanner.heartbeat.json')]
+                    + (['--profiles', str(args.profiles)] if plan else []))
     lock = ScanLock(str(db_path) + '.paper')
     acquired = False
     try:
         lock.acquire()
         acquired = True
         with ObservationStore(db_path) as store:
-            ledger = PaperLedger(store, policy)
+            ledger = ProfilePortfolio(store, plan) if plan else PaperLedger(store, policy)
             jupiter = Jupiter(Transport(store, daily))
             cycle = 0
             while True:

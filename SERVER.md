@@ -1,6 +1,6 @@
-# VPS: escaneo y simulación automática v0.6.0
+# VPS: escaneo y simulación automática v0.7.0
 
-Dos servicios: `scanner` analiza tokens; `paper` mantiene una cartera de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
+Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
 ## Preparación
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.6.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.7.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -51,22 +51,24 @@ Usa `config --quiet`: la salida completa de `docker compose config` podría most
 
 `restart: unless-stopped` reinicia procesos que terminan y permite recuperar el servicio cuando Docker arranca. El estado `healthy` solo indica progreso reciente del bucle (últimos 15 minutos), **no** calidad de datos, conexión satisfactoria a Jupiter ni rentabilidad. Docker no reinicia automáticamente un proceso solo por estar `unhealthy`: consulta los logs y, si procede, usa `docker compose restart scanner paper`. Puedes activar el servicio opcional de [avisos por Telegram](TELEGRAM.md); requiere vincularlo antes de enviar mensajes.
 
-El informe muestra saldo ficticio, coste comprometido, posiciones, cierres recientes, resultado realizado y bloqueos de entrada. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
+El informe muestra saldo ficticio, posiciones, cierres, resultado y bloqueos de entrada por perfil, además del agregado. Incluye rentabilidad ficticia, aciertos, factor de beneficio y drawdown de las valoraciones observadas, con sus limitaciones. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
 
-## Reglas de la cartera ficticia
+## Reglas de las tres carteras ficticias
 
-`paper-policy.json` define el experimento. Los valores iniciales son ilustrativos:
+`profiles.json` define el experimento activo de Compose. El detalle completo está en [PROFILES.md](PROFILES.md):
 
-- 1.000 USDC virtuales; 25 por entrada y hasta tres posiciones.
-- Señal candidata de esta versión con antigüedad máxima de 60 segundos. Se prioriza el ranking del escáner y se vuelven a consultar compra y venta. Todas las cotizaciones deben conservar identidad, importe y antigüedad máxima de 30 segundos.
-- Supuesto adicional de 0,5% de slippage por lado y 0,05 USDC por lado. Las comisiones incluidas en las cotizaciones no se vuelven a sumar. La cantidad ficticia de tokens se reduce por el slippage de entrada y se cotiza esa cantidad exacta para valorar/salir.
-- Salida por pérdida observada del 15%, ganancia observada del 30%, retroceso del 10% tras observar al menos un 15% de ganancia, o una hora de permanencia. También intenta salir si una nueva observación invalida al candidato.
-- Bloquea nuevas entradas cuando las pérdidas realizadas del día UTC, sin compensarlas con ganancias, más pérdidas actuales abiertas alcanzan 50 USDC. También bloquea con posiciones pendientes de venta o valoración. No garantiza limitar la pérdida total a esa cifra.
-- Tras cerrar un token espera una hora antes de otra entrada. Una misma señal no puede duplicar una posición; saldo y movimientos se guardan juntos en una transacción.
+- Conservador: 600 USDC virtuales, 50 por entrada; equilibrado: 300 y 25; agresivo: 100 y 10.
+- Dos posiciones como máximo por perfil. Los filtros exigen progresivamente más liquidez, menor concentración y más confirmación en el conservador.
+- Límite conjunto de exposición de 180 USDC y 70 en una misma moneda, incluidos costes de entrada.
+- Bloqueo conjunto por 30 USDC de pérdidas del día; límites individuales de 15, 10 y 5. Las ganancias no compensan esas pérdidas.
+- Salidas de todos los perfiles antes de nuevas entradas. Una salida o valoración pendiente bloquea las entradas en los tres.
+- Señales de hasta 60 segundos, cotizaciones de hasta 30 segundos y nuevas consultas antes de abrir cada posición.
+- Supuestos de slippage por lado de 0,5%, 0,5% y 1%, y 0,05 USDC de coste fijo por lado. No se vuelven a sumar las comisiones ya incluidas en las cotizaciones.
+- Saldos, posiciones y plan persisten juntos. Telegram incluye el perfil en cada operación.
 
 Las salidas se revisan al consultar, aproximadamente cada minuto con la configuración inicial; no al tocar el precio. Un salto de precio puede producir pérdidas mayores que el umbral. Si no hay ruta, la posición permanece abierta, el dinero sigue comprometido y el cierre solicitado se conserva para reintentarlo. Se usa la cotización que llegue después, sin inventar una ejecución al precio del stop.
 
-La política de una cartera inicializada queda fijada. Cambiar el JSON hace que el simulador se detenga; restaura el archivo original para continuar. Para probar parámetros distintos, usa otra carpeta, otro proyecto Compose (`docker compose -p otro-experimento ...`) y un volumen nuevo. Conserva el historial anterior. Una actualización de versión del escáner reinicia la confirmación temporal de candidatos, pero no borra posiciones existentes.
+El plan completo de las tres carteras inicializadas queda fijado. Cambiar el JSON hace que el simulador se detenga; restaura el archivo original para continuar. Para probar parámetros distintos, usa otra carpeta, otro proyecto Compose (`docker compose -p otro-experimento ...`) y un volumen nuevo. Conserva el historial anterior. Una actualización de versión del escáner reinicia la confirmación temporal de candidatos, pero no borra posiciones existentes.
 
 Esto no reproduce completamente MEV, congestión, gas, impacto propio ni fallos de ejecución. No constituye prueba de rentabilidad ni validación para operar dinero real.
 
@@ -94,6 +96,10 @@ docker compose up -d
 
 Detener servicios no cierra posiciones, ni siquiera las ficticias. Durante la parada no se observan precios ni se ejecutan reglas; al reanudar consulta cotizaciones actuales. Las pausas manuales sobreviven a reinicios. Evita `docker compose down -v`: elimina el volumen con el historial y la cartera.
 
+## Actualizar desde v0.6
+
+Guarda una copia consistente antes de actualizar. La migración automática a los tres perfiles exige que la cartera anterior siga con 1.000 USDC y nunca haya tenido posiciones; si tuvo actividad, se bloquea y conserva el estado. La cuenta anterior queda archivada y no se suma al capital nuevo. Guarda `profiles.json` junto con cada copia.
+
 ## Copias y restauración
 
 La copia usa la API de respaldo de SQLite; no copies solo el `.sqlite3` mientras está abierto en modo WAL.
@@ -103,7 +109,7 @@ La copia usa la API de respaldo de SQLite; no copies solo el `.sqlite3` mientras
 docker compose exec paper python server.py backup --backup-to /data/backups/copia-01.sqlite3
 mkdir -p backups
 docker compose cp paper:/data/backups/copia-01.sqlite3 ./backups/copia-01.sqlite3
-cp paper-policy.json ./backups/paper-policy-01.json
+cp profiles.json ./backups/profiles-01.json
 ```
 
 Para restaurar, usa una carpeta y un proyecto Compose nuevos con su propio volumen, configurando el archivo de política que acompañaba a la copia y `.env.server`. En esa carpeta, con la copia disponible en `backups/copia-01.sqlite3`:

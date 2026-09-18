@@ -180,11 +180,12 @@ def decide(row, policy):
 
 
 class Engine:
-    def __init__(self, store, transport, policy=None, enhanced_policy=None, sizes=(100.0,)):
+    def __init__(self, store, transport, policy=None, enhanced_policy=None, sizes=(100.0,), profile_plan=None):
         self.store, self.transport = store, transport
         self.policy = policy or legacy.Policy()
         self.enhanced_policy = enhanced_policy or EnhancedPolicy()
         self.sizes = sizes
+        self.profile_plan = profile_plan
         self.jupiter = Jupiter(transport)
 
     def analyze(self, chain, mint, sources=(), now=None):
@@ -231,7 +232,12 @@ class Engine:
         # Quitar el veto fijo de 30 minutos: confirmar trayectoria será obligatorio para todas las fases.
         row['policy'] = asdict(replace(self.policy, min_age_hours=0))
         row['exit_quotes'] = []
+        needed = self.profile_plan.sizes_to_quote(row, current_time) if self.profile_plan else self.sizes
         for size in self.sizes:
+            if size not in needed:
+                row['exit_quotes'].append({'status': 'not_requested', 'amount_usdc': size,
+                                          'reason': 'comprobaciones previas del perfil no superadas'})
+                continue
             try:
                 quote = self.jupiter.round_trip(mint, size) if chain == 'solana' else {'status': 'unsupported', 'amount_usdc': size}
             except RuntimeError as exc:
@@ -250,4 +256,16 @@ class Engine:
                 if any(at is None or at > current_time + 30 or current_time - at > 30 for at in times):
                     quote['status'] = 'stale'
         row['trajectory'] = trajectory(row, self.store.history(chain, mint, current_time), self.enhanced_policy, current_time)
-        return decide(row, self.enhanced_policy)
+        decide(row, self.enhanced_policy)
+        if self.profile_plan:
+            row['profile_plan_hash'] = self.profile_plan.digest
+            row['profiles'] = self.profile_plan.evaluate(row, self.store.history(chain, mint, current_time), current_time)
+            # La prioridad de seguimiento depende del perfil que esté más cerca de confirmarse.
+            order = {'candidate': 0, 'observing': 1, 'insufficient_data': 2, 'rejected': 3}
+            best = min(row['profiles'].values(), key=lambda p: order[p['state']])
+            row['state'], row['quality_pass'] = best['state'], best['quality_pass']
+            for key in ('research_score', 'decision_reasons', 'decision_checks', 'quality_fail_reasons',
+                        'dimensions', 'selection_evidence', 'invalidates_if'):
+                row[key] = best[key]
+            row['selected_profile_summary'] = best['profile_id']
+        return row
