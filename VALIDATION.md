@@ -20,7 +20,7 @@ El plan de riesgo, capital 600/300/100, tamaños 50/25/10, controles LP, propiet
 
 ## Pruebas reproducibles
 
-212 pruebas pasan con Python 3.9.6 local y Python 3.12 dentro del contenedor del VPS. Se mantienen las 204 anteriores y se añaden ocho que reproducen los casos de esta revisión.
+213 pruebas pasan con Python 3.9.6 local y Python 3.12 dentro del contenedor del VPS. Se mantienen las 204 anteriores y se añaden nueve que reproducen los casos de esta revisión.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -34,6 +34,10 @@ La CI ejecuta Python 3.9, 3.12 y 3.13, más una comprobación Docker con persist
 El preflight v0.9 encontró 27 direcciones de actividad y 23 de tendencia: 40 distintas. Seis pasaron la preselección; las tres examinadas a fondo fueron rechazadas por LP insuficiente, cambios extremos de precio y/o datos incompletos, según perfil. Las dos listas respondieron sin errores. No se guardaron señales de entrada ni se modificaron carteras; las llamadas se contabilizaron en la cuota compartida.
 
 No es una comparación simultánea ni aleatoria con v0.8.1 y no permite afirmar mayor rentabilidad. Los datos reales cambian, por lo que no se espera reproducir los mismos recuentos. El estudio prospectivo solo cubre los tokens que alcanzan análisis profundo; no todos los descartados en preselección.
+
+## Supervisión concurrente
+
+Se reproduce y corrige una condición de carrera en Telegram: tomar la hora antes de leer el ledger podía clasificar como futuro un heartbeat escrito durante esa lectura. En producción se consulta el reloj después de leer cada heartbeat; fechas realmente futuras, estados detenidos y señales caducadas siguen fallando. El cambio no altera decisiones ni reinicia la versión experimental.
 
 ## Fuentes técnicas y límites
 
