@@ -45,3 +45,7 @@ Referencias técnicas de los lotes: [Jupiter Tokens](https://developers.jup.ag/d
 El estudio toma su muestra de los tokens que alcanzan análisis profundo. Desde v0.9 se añaden listas de actividad/tendencia y se exige compatibilidad conjunta con los umbrales básicos de un perfil antes del análisis. Los aplazados en preselección no reciben seguimiento prospectivo de precios: no se puede estimar el rendimiento de todo el universo descartado ni atribuir diferencias entre versiones únicamente a los filtros. La versión queda separada en cada observación. Se mantienen los tamaños, costes, horizontes y límites diarios del protocolo.
 
 Mantener los parámetros del plan fijos durante la recogida de datos. Una muestra pequeña sin operaciones no permite optimizar umbrales ni afirmar ventaja. Cualquier cambio futuro de parámetros requiere una hipótesis explícita, una cohorte nueva y evaluación posterior con costes y rutas ausentes visibles.
+
+## Ampliación opcional del universo v0.10.0
+
+Fomo añade direcciones observadas en listas web, no evidencia de rentabilidad ni de compradores únicos. La recepción queda registrada con su hora de captura, fuentes y deduplicación. Se mantienen políticas y cuotas; la versión separa el nuevo universo de los históricos v0.9. Las listas renderizadas y una recogida horaria tienen sesgo de selección y pueden perder oportunidades entre capturas. Debe medirse el rendimiento prospectivo y el solapamiento con las otras fuentes antes de atribuirle una mejora. Véase [FOMO.md](FOMO.md).

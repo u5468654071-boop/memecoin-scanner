@@ -35,6 +35,7 @@ def main(argv=None):
     parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
     parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
     parser.add_argument('--profiles', type=Path, default=os.environ.get('PAPER_PROFILES_FILE'))
+    parser.add_argument('--fomo-inbox', type=Path, default=os.environ.get('FOMO_INBOX_FILE'))
     parser.add_argument('--service', choices=('scanner', 'paper'), default='paper')
     parser.add_argument('--cycles', type=int, default=0, help='Solo pruebas acotadas; 0 es continuo')
     parser.add_argument('--backup-to', type=Path)
@@ -128,7 +129,8 @@ def main(argv=None):
                      '--daily-api-limit', str(daily-reserve), '--db', str(db_path),
                      '--log', str(root / 'scan_log.csv'), '--json-output', str(root / 'scanner-report.json'),
                      '--heartbeat', str(root / 'scanner.heartbeat.json')]
-                    + (['--profiles', str(args.profiles)] if plan else []))
+                    + (['--profiles', str(args.profiles)] if plan else [])
+                    + (['--fomo-inbox', str(args.fomo_inbox)] if args.fomo_inbox else []))
     lock = ScanLock(str(db_path) + '.paper')
     acquired = False
     try:

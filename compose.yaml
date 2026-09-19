@@ -1,12 +1,13 @@
 name: memecoin-paper
 x-common: &common
   build: .
-  image: memecoin-scanner:0.9.0
+  image: memecoin-scanner:0.10.0
   env_file: .env.server
   volumes:
     - state:/data
     - ./paper-policy.json:/app/paper-policy.json:ro
     - ./profiles.json:/app/profiles.json:ro
+    - ./data/fomo-inbox:/fomo:ro
   read_only: true
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=32m
@@ -27,7 +28,7 @@ x-common: &common
 services:
   scanner:
     <<: *common
-    command: [scan, --profiles, /app/profiles.json]
+    command: [scan, --profiles, /app/profiles.json, --fomo-inbox, /fomo/inbox.json]
     healthcheck:
       test: [CMD, python, server.py, health, --service, scanner]
       interval: 60s

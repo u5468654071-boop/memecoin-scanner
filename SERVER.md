@@ -1,4 +1,4 @@
-# VPS: escaneo y simulación automática v0.9.0
+# VPS: escaneo y simulación automática v0.10.0
 
 Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.9.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.10.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -145,3 +145,7 @@ Desde v0.8.1, la preselección reserva 20 de los 30 huecos a tokens de listas de
 Dentro de los 20 huecos de listas, se alternan tokens de actividad/tendencia y otras fuentes. Dentro de cada grupo, se alternan revisitas vencidas y primeras consultas; los huecos sobrantes se aprovechan. Se mantienen 30 preselecciones y tres análisis profundos por ciclo. Las dos consultas adicionales de Jupiter usan el presupuesto compartido y respetan la reserva para salidas.
 
 `server.py coverage` informa de `ready_and_due` (evidencia reciente y descanso cumplido), `ready_with_expired_probe`, confirmaciones activas, fuentes y motivos de preselección. Por perfil, `quote_statuses.not_requested` significa que los controles previos impidieron pedir precio; `unavailable` es una cotización solicitada pero no utilizable. No deben confundirse.
+
+## Entrada opcional de Fomo
+
+Compose lee capturas en `data/fomo-inbox/inbox.json` mediante un montaje de solo lectura. La ausencia o caducidad del archivo no detiene las demás fuentes. La recogida de navegador y su transporte se configuran por separado; consulta [FOMO.md](FOMO.md).
