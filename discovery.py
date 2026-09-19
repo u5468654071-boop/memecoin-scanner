@@ -24,7 +24,7 @@ def create_queue(db):
     ''')
 
 
-def screen(mint, pairs, organic, now, minimum_liquidity, maximum_age, minimum_age):
+def screen(mint, pairs, organic, now, minimum_liquidity, maximum_age, minimum_age, profiles=None):
     # La curva inicial se conserva en eventos; el motor de entrada opera pools DEX.
     tradable = [p for p in pairs if str(p.get('dexId', '')).lower() != 'pumpfun']
     pair = legacy.select_pair(tradable, 'solana', mint)
@@ -62,6 +62,35 @@ def screen(mint, pairs, organic, now, minimum_liquidity, maximum_age, minimum_ag
     if organic.get('flagged_suspicious'):
         reasons.append('jupiter_suspicious')
         retry = max(retry, 900)
+    if profiles:
+        score = legacy.number(organic.get('organic_score'), 0, 100)
+        buyers = legacy.number(legacy.obj(legacy.obj(organic.get('windows')).get('5m')).get('numOrganicBuyers'), 0)
+        failures, compatible = {}, []
+        for profile in profiles:
+            market, enhanced = profile['market'], profile['enhanced']
+            failed = []
+            if age is None or not market['min_age_hours'] <= age <= market['max_age_hours']:
+                failed.append('age')
+            if liquidity is None or liquidity < market['min_liquidity']:
+                failed.append('liquidity')
+            if score is None or score < enhanced['min_organic_score']:
+                failed.append('organic_score')
+            if buyers is None or buyers < enhanced['min_organic_buyers_5m']:
+                failed.append('organic_buyers')
+            failures[profile['id']] = failed
+            if not failed:
+                compatible.append(profile['id'])
+        evidence.update(organic_buyers_5m=buyers, compatible_profiles=compatible, profile_failures=failures)
+        if not compatible:
+            reasons.append('no_compatible_profile')
+            if score is None:
+                reasons.append('organic_score_missing')
+            elif score < min(p['enhanced']['min_organic_score'] for p in profiles):
+                reasons.append('organic_score_below_all_profiles')
+            if buyers is None:
+                reasons.append('organic_buyers_missing')
+            elif buyers < min(p['enhanced']['min_organic_buyers_5m'] for p in profiles):
+                reasons.append('organic_buyers_below_all_profiles')
     # Solo ordenar la investigación, nunca estimar probabilidad de beneficio.
     priority = (organic.get('organic_score') or 0) + min(20, (liquidity or 0)/50000)
     return {'stage': 'deferred' if reasons else 'ready', 'reasons': reasons,
@@ -104,9 +133,25 @@ class DiscoveryQueue:
         query = '''SELECT mint FROM discovery_v8 WHERE chain='solana'
             AND last_seen>=? AND next_probe<=? AND (stage!='confirm' OR confirm_until<?)
             AND (sources='["pumpportal_migration"]')={}
-            ORDER BY COALESCE(last_probe,0),first_seen DESC,mint LIMIT ?'''
-        feeds = self.db.execute(query.format(0),(at-86400,at,at,limit)).fetchall()
-        migrations = self.db.execute(query.format(1),(at-86400,at,at,limit)).fetchall()
+            AND (sources LIKE '%jupiter_market_%')={}
+            AND (last_probe IS NULL)={}
+            ORDER BY COALESCE(last_probe,0), (sources LIKE '%jupiter_market_%') DESC,
+                     first_seen DESC,mint LIMIT ?'''
+        def interleave(first, second):
+            merged = []
+            for index in range(max(len(first),len(second))):
+                for rows in (first,second):
+                    if index < len(rows):
+                        merged.append(rows[index])
+            return merged
+        def fair_lane(migration, market):
+            new = self.db.execute(query.format(migration,market,1),(at-86400,at,at,limit)).fetchall()
+            due = self.db.execute(query.format(migration,market,0),(at-86400,at,at,limit)).fetchall()
+            # Alternar revisitas y nuevas: una llegada continua no bloquea ninguna.
+            return interleave(due,new)
+        # De 20 huecos de listas, reservar 10 al universo de actividad; ceder sobrantes.
+        feeds = interleave(fair_lane(0,1),fair_lane(0,0))
+        migrations = fair_lane(1,0)
         feed_quota = max(1,limit*2//3)
         chosen = {r['mint']:r for r in feeds[:feed_quota]+migrations[:limit-feed_quota]}
         for row in feeds+migrations:
@@ -135,7 +180,8 @@ class DiscoveryQueue:
         at = clock()
         with self.db:
             for mint in mints:
-                result = screen(mint, pairs[mint], organic[mint], at, minimum_liquidity, maximum_age, minimum_age)
+                result = screen(mint, pairs[mint], organic[mint], at, minimum_liquidity, maximum_age, minimum_age,
+                                self.plan.profiles)
                 ready += result['stage'] == 'ready'
                 if errors:
                     result['reasons'].append('provider_error')
@@ -201,9 +247,14 @@ class DiscoveryQueue:
 
     def report(self, now=None):
         now = time.time() if now is None else now
-        entries = self.db.execute("SELECT stage,reason_codes FROM discovery_v8 WHERE last_seen>=?", (now-86400,)).fetchall()
+        entries = self.db.execute("SELECT * FROM discovery_v8 WHERE last_seen>=?", (now-86400,)).fetchall()
         return {'active_24h':len(entries), 'stages':dict(collections.Counter(r['stage'] for r in entries)),
                 'screening_reasons':dict(collections.Counter(reason for r in entries for reason in json.loads(r['reason_codes']))),
+                'ready_and_due':sum(r['stage']=='ready' and r['next_full']<=now and
+                                    r['last_probe'] is not None and now-300<=r['last_probe']<=now for r in entries),
+                'ready_with_expired_probe':sum(r['stage']=='ready' and (r['last_probe'] or 0)<now-300 for r in entries),
+                'active_confirmations':sum(r['stage']=='confirm' and (r['confirm_until'] or 0)>=now for r in entries),
+                'source_counts':dict(collections.Counter(s for r in entries for s in json.loads(r['sources']))),
                 'scope':'Preselección; ready no es una aprobación de entrada.'}
 
 
@@ -214,7 +265,8 @@ def coverage_report(store, now=None, hours=24):
         ORDER BY id DESC LIMIT 5000''', (now-hours*3600,))
     counts, networks = collections.Counter(), collections.Counter()
     dimensions = {key:collections.Counter() for key in ('mint_check','pool_check','holders','networks','organic','trajectory')}
-    profiles = {ident:{'states':collections.Counter(),'market_failures':collections.Counter()}
+    profiles = {ident:{'states':collections.Counter(),'market_failures':collections.Counter(),
+                      'decision_blockers':collections.Counter(),'quote_statuses':collections.Counter()}
                 for ident in ('conservative','balanced','aggressive')}
     total, observations = 0, 0
     for record in data:
@@ -232,6 +284,8 @@ def coverage_report(store, now=None, hours=24):
             if decision:
                 group['states'][decision['state']] += 1
                 group['market_failures'].update(c['code']+':'+c['status'] for c in decision.get('market_checks',[]))
+                group['decision_blockers'].update(decision.get('decision_checks',{}).get('blockers',[]))
+                group['quote_statuses'].update(q.get('status','missing') for q in decision.get('exit_quotes',[]))
     return {'scanner_version':SCANNER_VERSION, 'hours':hours, 'observations':observations, 'unique_tokens':len(counts),
             'tokens_with_revisits':sum(n>1 for n in counts.values()), 'dimensions':dimensions, 'profiles':profiles,
             'network_reason_codes':dict(networks),

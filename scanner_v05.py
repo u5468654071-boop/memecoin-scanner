@@ -47,7 +47,7 @@ def build_parser():
     parser.add_argument('--version', action='version', version=SCANNER_VERSION)
     parser.add_argument('--chain', choices=('solana', 'base', 'ethereum'), default='solana')
     parser.add_argument('--tokens', help='Direcciones separadas por coma')
-    parser.add_argument('--candidates', default='boosted,profiles', help='boosted,profiles,jupiter,jupiter-organic; vacío para solo pendientes')
+    parser.add_argument('--candidates', default='boosted,profiles', help='boosted,profiles,jupiter,jupiter-organic,jupiter-market; vacío para solo pendientes')
     parser.add_argument('--search', action='append', default=[])
     parser.add_argument('--limit', type=int, default=10)
     parser.add_argument('--max-tokens', type=int, default=20)
@@ -92,8 +92,8 @@ def main(argv=None):
     if args.watch and (args.stream or args.report or args.evaluate or args.alerts):
         parser.error('--watch no se combina con report/evaluate/alerts/stream; usa --with-stream')
     sources = list(dict.fromkeys(s.strip() for s in args.candidates.split(',') if s.strip()))
-    if any(s not in ('boosted', 'profiles', 'jupiter', 'jupiter-organic') for s in sources):
-        parser.error('fuentes admitidas: boosted,profiles,jupiter,jupiter-organic')
+    if any(s not in ('boosted', 'profiles', 'jupiter', 'jupiter-organic', 'jupiter-market') for s in sources):
+        parser.error('fuentes admitidas: boosted,profiles,jupiter,jupiter-organic,jupiter-market')
     policy = legacy.Policy(**{k: getattr(args, k) for k in asdict(legacy.Policy())})
     enhanced = EnhancedPolicy(**{k: getattr(args, k) for k in asdict(EnhancedPolicy())})
     profile_plan = None
@@ -203,7 +203,15 @@ def main(argv=None):
                 if manual is not None:
                     provenance = {mint: ['manual'] for mint in manual}
                 else:
-                    found, errors = legacy.gather_candidates(args.chain, [s for s in sources if s not in ('jupiter', 'jupiter-organic')], args.limit, args.search)
+                    found, errors = legacy.gather_candidates(args.chain, [s for s in sources if s not in ('jupiter', 'jupiter-organic', 'jupiter-market')], args.limit, args.search)
+                    if 'jupiter-market' in sources and args.chain == 'solana':
+                        maximum_age = max(p['market']['max_age_hours'] for p in profile_plan.profiles) if profile_plan else policy.max_age_hours
+                        for category in ('traded', 'trending'):
+                            try:
+                                for mint in engine.jupiter.discover_market(args.limit, category, maximum_age):
+                                    found.setdefault(mint, []).append('jupiter_market_' + category)
+                            except RuntimeError as exc:
+                                errors.append(str(exc))
                     if 'jupiter' in sources and args.chain == 'solana':
                         try:
                             for mint in engine.jupiter.discover(args.limit):

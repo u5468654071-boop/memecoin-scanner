@@ -39,3 +39,9 @@ Primero hay que acumular una muestra prospectiva con cobertura suficiente, inclu
 Quedan para experimentos posteriores entradas específicas para cada fase, salidas parciales y una comprobación independiente de grupos de wallets y bloqueo LP. Esta versión mantiene las reglas y asignaciones de los tres perfiles; mejora búsqueda, seguimiento y diagnóstico sin relajar los controles críticos.
 
 Referencias técnicas de los lotes: [Jupiter Tokens](https://developers.jup.ag/docs/tokens/token-information) y [DexScreener API](https://docs.dexscreener.com/api/reference). Los límites y la disponibilidad de los proveedores se siguen comprobando en ejecución.
+
+## Universo de selección v0.9.0
+
+El estudio toma su muestra de los tokens que alcanzan análisis profundo. Desde v0.9 se añaden listas de actividad/tendencia y se exige compatibilidad conjunta con los umbrales básicos de un perfil antes del análisis. Los aplazados en preselección no reciben seguimiento prospectivo de precios: no se puede estimar el rendimiento de todo el universo descartado ni atribuir diferencias entre versiones únicamente a los filtros. La versión queda separada en cada observación. Se mantienen los tamaños, costes, horizontes y límites diarios del protocolo.
+
+Mantener los parámetros del plan fijos durante la recogida de datos. Una muestra pequeña sin operaciones no permite optimizar umbrales ni afirmar ventaja. Cualquier cambio futuro de parámetros requiere una hipótesis explícita, una cohorte nueva y evaluación posterior con costes y rutas ausentes visibles.
