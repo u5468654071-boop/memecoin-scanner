@@ -138,14 +138,10 @@ def decide(row, policy):
     check_row = dict(row)
     check_row['lp_locked_pct'] = pool.get('locked_pct')
     market_policy = legacy.Policy(**row['policy'])
-    reasons = legacy.quality_reasons(check_row, market_policy)
-    if reasons:
-        # No clasificar datos ausentes como evidencia de fraude.
-        missing_market = (row.get('analysis_status') != 'ok' or row.get('rugcheck_status') != 'ok'
-                          or pool['status'] != 'reported'
-                          or any(row.get(k) is None for k in ('price_usd','liquidity_usd','age_hours','fdv_liquidity_ratio',
-                                                            'buys_h1','sells_h1','volume_h1','price_change_h1')))
-        (missing if missing_market else hard).extend(reasons)
+    row['market_checks'] = legacy.quality_checks(check_row, market_policy)
+    reasons = [check['reason'] for check in row['market_checks']]
+    for check in row['market_checks']:
+        {'missing': missing, 'blocked': hard, 'waiting': wait}[check['status']].append(check['reason'])
     row['decision_reasons'] = list(dict.fromkeys(hard + missing + wait))
     row['decision_checks'] = {'blockers': list(dict.fromkeys(hard)), 'missing': list(dict.fromkeys(missing)),
                               'waiting': list(dict.fromkeys(wait))}

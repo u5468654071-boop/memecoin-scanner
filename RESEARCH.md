@@ -1,0 +1,41 @@
+# Estudio prospectivo v0.8
+
+El objetivo es comprobar si las selecciones y descartes contienen información útil sobre retornos posteriores. No existe todavía una ventaja demostrada ni un sistema ganador validado. Esta primera mejora corrige la recogida de datos y fija cómo se medirán; no optimiza filtros sobre los resultados de la misma muestra.
+
+## Protocolo fijado antes de los resultados
+
+- Identificador: `forward-10usdc-v1`. El código y el plan quedan asociados a cada muestra.
+- Universo: monedas que llegan al análisis completo de Solana con un pool DEX, en fase `new_pool`, `recent_migration` o `established`. Excluye curvas iniciales y monedas que nunca pasan por ese análisis. La cola ya aplica filtros de disponibilidad y mercado: no representa todas las memecoins ni permite evaluar los descartes de esa preselección.
+- Muestra: hash SHA-256 de estudio, versión, plan y mint, módulo 5 igual a cero; aproximadamente un 20% antes del límite. Máximo 24 altas por día UTC, una por moneda/plan/versión y tipo de estudio. El límite favorece las que llegan primero ese día; las versiones pueden tener muestras distintas.
+- Se fijan las etiquetas de cada perfil (`selected`, estado y motivos) antes de conocer el resultado futuro. `selected` corresponde a `quality_pass` de esa observación. Un token que espera confirmación cuenta como no seleccionado en ese instante.
+- Entrada hipotética común: 10 USDC, compra cotizada y ruta inversa para la cantidad obtenida. Observación inicial de hasta 60 segundos y cotizaciones de hasta 30 segundos. Se descuenta un 0,5% de cantidad al comprar y se añade un coste fijo de 0,05 USDC.
+- Salidas: nuevas cotizaciones para esa cantidad exacta a 1, 2 y 4 horas desde la cotización inicial, con un plazo máximo adicional de 180 segundos. Se aplica otro 0,5% de deslizamiento supuesto y 0,05 USDC de coste fijo. Son escenarios alternativos, no tres ventas del mismo saldo.
+- La muestra y sus horizontes se guardan antes de consultar la API. Una ruta ausente o un reinicio no borran el caso ni lo sustituyen por otra entrada favorable. Las consultas de salida fallidas se reintentan como máximo una vez por minuto dentro del plazo. Una respuesta posterior al plazo no se usa como precio histórico.
+
+Los costes son supuestos reproducibles; las cotizaciones pueden incluir otros cargos del proveedor. No representan una ejecución, ni modelan completamente MEV, el impacto de nuestra compra, costes de cuentas o fallos al enviar transacciones. El estudio no tiene wallet, no modifica el dinero ficticio de las carteras y no envía avisos de operaciones.
+
+## Primera observación y confirmación posterior
+
+La primera observación suele estar esperando confirmación temporal. Si más adelante aparece una señal válida de algún perfil y la muestra inicial no tenía ninguna, se abre una segunda muestra identificada como `forward-10usdc-confirmed-v1`, con nueva cotización inicial y nuevos plazos. Se conservan las etiquetas de la primera muestra: nunca se reclasifica un descarte mirando el futuro. Una señal que ya estaba confirmada en la muestra inicial no se duplica.
+
+Ambos estudios comparten el límite de 24 altas al día y los mismos supuestos de costes. Cada moneda puede tener como máximo una muestra de cada tipo por plan y versión. Si se agotó la cuota, la primera señal registrada podría ser posterior a la primera señal detectada. Los informes los separan; pueden compartir monedas y no son muestras independientes ni una comparación causal entre señales y descartes.
+
+## Interpretación del informe
+
+```bash
+docker compose exec paper python server.py coverage
+```
+
+`forward_study.groups` separa estudio, versión, huella del plan, horizonte y etiqueta de perfil. Publica muestras, casos vencidos, estados y cobertura de salidas. `quoted` dispone de cotización; `untrackable` no obtuvo una entrada utilizable; `unavailable` agotó el plazo tras fallos; `missed` perdió el plazo; `pending` sigue pendiente. Un fallo inesperado conserva la reserva inicial como no observable.
+
+Las medias y medianas llevan el sufijo `observed_only`: omiten retornos desconocidos y pueden ser optimistas si desaparecen las monedas peores. Hay que publicar cobertura, fallos, tamaño de muestra y sensibilidad a costes conjuntamente. Las filas `all` y las de cada perfil se solapan: no se suman como operaciones independientes.
+
+Las etiquetas no son una asignación aleatoria. Una diferencia entre grupos no demuestra que un filtro la causó. El estudio de 10 USDC tampoco mide stops, dimensionamiento, salidas parciales ni rendimiento de las carteras 600/300/100. Esos resultados se consultan por separado en `server.py report`. Las series anteriores de 1/6/24 horas no se mezclan con este protocolo.
+
+## Antes de modificar una estrategia
+
+Primero hay que acumular una muestra prospectiva con cobertura suficiente, incluyendo períodos sin oportunidades y fallos de datos. Después, cualquier hipótesis nueva debe fijarse con su versión, contrastarse en otro período y evaluarse con costes y pérdidas máximas. Cambiar repetidamente umbrales mirando los mismos resultados puede producir una aparente ventaja por casualidad. No se ha establecido todavía un tamaño de muestra que permita afirmar rentabilidad.
+
+Quedan para experimentos posteriores entradas específicas para cada fase, salidas parciales y una comprobación independiente de grupos de wallets y bloqueo LP. Esta versión mantiene las reglas y asignaciones de los tres perfiles; mejora búsqueda, seguimiento y diagnóstico sin relajar los controles críticos.
+
+Referencias técnicas de los lotes: [Jupiter Tokens](https://developers.jup.ag/docs/tokens/token-information) y [DexScreener API](https://docs.dexscreener.com/api/reference). Los límites y la disponibilidad de los proveedores se siguen comprobando en ejecución.
