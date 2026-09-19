@@ -1,8 +1,8 @@
-# Memecoin Scanner v0.9.0
+# Memecoin Scanner v0.10.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 213 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
+Estado: versión de investigación, con 225 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
@@ -11,6 +11,10 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 ## Tres perfiles en el VPS
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
+
+## Fomo en v0.10
+
+[Fomo](FOMO.md) puede aportar monedas desde capturas recientes de su panel web. Es una fuente adicional de descubrimiento: conserva la procedencia, rechaza capturas antiguas y duplicadas, y aplica los mismos filtros antes de cualquier entrada ficticia. Necesita un colector externo con una sesión de navegador; instalar el repositorio no crea esa sesión ni programa las capturas.
 
 ## Selección y evaluación v0.9
 

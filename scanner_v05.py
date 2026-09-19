@@ -59,6 +59,7 @@ def build_parser():
     parser.add_argument('--json-output', type=Path, default=Path('data/latest_v05.json'))
     parser.add_argument('--heartbeat', type=Path, help='Estado local de progreso para supervisión del servicio')
     parser.add_argument('--profiles', type=Path, help='Plan experimental de tres perfiles sobre los mismos datos')
+    parser.add_argument('--fomo-inbox', type=Path, help='Captura local reciente de Fomo; solo descubrimiento Solana con perfiles')
     parser.add_argument('--quality-filter', action='store_true', help='Compatibilidad: el filtro está siempre activo')
     for key, value in asdict(legacy.Policy()).items():
         parser.add_argument('--' + key.replace('_', '-'), type=float, default=value,
@@ -123,6 +124,8 @@ def main(argv=None):
         parser.error('sizes-usdc: entre uno y tres tamaños positivos, máximo 1.000.000 USDC y seis decimales')
     if profile_plan:
         sizes = profile_plan.sizes
+    if args.fomo_inbox and (not profile_plan or args.chain != 'solana' or args.tokens is not None):
+        parser.error('--fomo-inbox necesita perfiles Solana y no se combina con --tokens')
     manual = None
     if args.tokens is not None:
         manual = list(dict.fromkeys(t.strip() for t in args.tokens.split(',') if t.strip()))
@@ -200,6 +203,8 @@ def main(argv=None):
                 heartbeat(args.heartbeat, 'discovering')
                 errors = []
                 discovery_stats = None
+                from fomo_source import import_snapshot
+                fomo_status = import_snapshot(args.fomo_inbox, store, queue) if queue else {'enabled':False,'state':'disabled'}
                 if manual is not None:
                     provenance = {mint: ['manual'] for mint in manual}
                 else:
@@ -267,6 +272,7 @@ def main(argv=None):
                 rows.sort(key=lambda r: (not r['quality_pass'], -(r['research_score'] or 0), r['base_address']))
                 legacy.log_results(rows, args.log)
                 result = {'scanner_version': SCANNER_VERSION, 'run_id': run_id, 'source_errors': errors,
+                          'fomo_source':fomo_status,
                           'rows': rows, 'alerts': store.alerts(), 'configuration': {
                               'jupiter_configured': engine.jupiter.enabled, 'sizes_usdc': sizes,
                               'daily_api_limit_per_provider': args.daily_api_limit}}

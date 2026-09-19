@@ -55,6 +55,8 @@ class ObservationStore(Store):
         create_queue(self.db)
         from forward_study import create_study
         create_study(self.db)
+        from fomo_source import create_source
+        create_source(self.db)
 
     def reserve_call(self, provider, limit, now=None, min_interval=0):
         """Devuelve espera sin consumir cuota, o 0 al reservar una llamada ahora."""
