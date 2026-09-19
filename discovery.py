@@ -99,9 +99,21 @@ class DiscoveryQueue:
     def refresh(self, jupiter, transport, now=None, limit=30):
         clock = (lambda: now) if now is not None else time.time
         at = clock()
-        pending = self.db.execute('''SELECT mint FROM discovery_v8 WHERE chain='solana'
+        # Una recuperación del stream puede aportar cientos de migraciones antiguas.
+        # Reservar capacidad a las listas de mercado para que ese backlog no las bloquee.
+        query = '''SELECT mint FROM discovery_v8 WHERE chain='solana'
             AND last_seen>=? AND next_probe<=? AND (stage!='confirm' OR confirm_until<?)
-            ORDER BY COALESCE(last_probe,0),first_seen,mint LIMIT ?''', (at-86400,at,at,limit)).fetchall()
+            AND (sources='["pumpportal_migration"]')={}
+            ORDER BY COALESCE(last_probe,0),first_seen DESC,mint LIMIT ?'''
+        feeds = self.db.execute(query.format(0),(at-86400,at,at,limit)).fetchall()
+        migrations = self.db.execute(query.format(1),(at-86400,at,at,limit)).fetchall()
+        feed_quota = max(1,limit*2//3)
+        chosen = {r['mint']:r for r in feeds[:feed_quota]+migrations[:limit-feed_quota]}
+        for row in feeds+migrations:
+            if len(chosen)>=limit:
+                break
+            chosen.setdefault(row['mint'],row)
+        pending = list(chosen.values())
         mints = [r['mint'] for r in pending]
         if not mints:
             return {'probed': 0, 'ready': 0, 'errors': []}
