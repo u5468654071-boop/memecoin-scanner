@@ -304,57 +304,66 @@ class Policy:
     max_market_score: int = 4
 
 
-def quality_reasons(row, policy):
-    reasons = []
+def quality_checks(row, policy):
+    """Distinguir ausencia, umbral incumplido y edad pendiente en cada comprobación."""
+    checks = []
+    def add(code, reason, missing=False, waiting=False):
+        checks.append({'code': code, 'reason': reason,
+                       'status': 'missing' if missing else ('waiting' if waiting else 'blocked')})
     if row.get("analysis_status") != "ok":
-        reasons.append("análisis de mercado incompleto")
+        add('market_data', "análisis de mercado incompleto", True)
     if row.get("chain") != "solana":
-        reasons.append("validación on-chain solo disponible para Solana")
+        add('chain', "validación on-chain solo disponible para Solana", True)
     if row.get("quote_address") not in QUOTE_MINTS.get(row.get("chain"), set()):
-        reasons.append("activo de cotización no admitido")
+        add('quote_asset', "activo de cotización no admitido", not row.get('quote_address'))
     age = number(row.get("age_hours"), 0)
     if age is None or not policy.min_age_hours <= age <= policy.max_age_hours:
-        reasons.append("edad del par desconocida o fuera del intervalo")
+        add('age', "edad del par desconocida o fuera del intervalo", age is None,
+            age is not None and age < policy.min_age_hours)
     liq = number(row.get("liquidity_usd"), 0)
     if liq is None or liq < policy.min_liquidity or liq == 0:
-        reasons.append("liquidez desconocida o insuficiente")
+        add('liquidity', "liquidez desconocida o insuficiente", liq is None)
     price = number(row.get("price_usd"), 0)
     if price is None or price == 0:
-        reasons.append("precio desconocido o inválido")
+        add('price', "precio desconocido o inválido", price is None)
     if row.get("rugcheck_status") != "ok":
-        reasons.append("RugCheck no disponible o incompleto")
+        add('rugcheck', "RugCheck no disponible o incompleto", True)
     if row.get("has_danger_flag") is not False:
-        reasons.append("riesgos danger presentes o sin verificar")
+        add('danger', "riesgos danger presentes o sin verificar", row.get('has_danger_flag') is not True)
     lp = number(row.get("lp_locked_pct"), 0, 100)
     if lp is None or lp < policy.min_lp_locked_pct:
-        reasons.append("porcentaje de LP bloqueada desconocido o insuficiente")
+        add('lp', "porcentaje de LP bloqueada desconocido o insuficiente", lp is None)
     rug_score = number(row.get("rugcheck_score_0_100"), 0, 100)
     if rug_score is None or rug_score > policy.max_rugcheck_score:
-        reasons.append("score de RugCheck desconocido o elevado")
+        add('rug_score', "score de RugCheck desconocido o elevado", rug_score is None)
     buys, sells = number(row.get("buys_h1"), 0), number(row.get("sells_h1"), 0)
     if buys is None or sells is None or buys + sells <= 0 or buys + sells < policy.min_txns_h1:
-        reasons.append("actividad de una hora desconocida o insuficiente")
+        add('transactions', "actividad de una hora desconocida o insuficiente", buys is None or sells is None)
     if sells is None or sells < policy.min_sells_h1:
-        reasons.append("pocas ventas observadas; no prueba que se pueda vender")
+        add('sells', "pocas ventas observadas; no prueba que se pueda vender", sells is None)
     if buys is not None and sells is not None and buys + sells > 0:
         ratio = buys / (buys + sells)
         if not 0.2 <= ratio <= 0.9:
-            reasons.append("desequilibrio extremo de compras/ventas")
+            add('flow_balance', "desequilibrio extremo de compras/ventas")
     volume = number(row.get("volume_h1"), 0)
     if volume is None or volume < policy.min_volume_h1:
-        reasons.append("volumen de una hora desconocido o insuficiente")
+        add('volume', "volumen de una hora desconocido o insuficiente", volume is None)
     if liq and volume is not None and volume / liq > policy.max_volume_liquidity_h1:
-        reasons.append("rotación de volumen extrema; posible manipulación")
+        add('turnover', "rotación de volumen extrema; posible manipulación")
     fdv_ratio = number(row.get("fdv_liquidity_ratio"), 0)
     if fdv_ratio is None or fdv_ratio > policy.max_fdv_liquidity:
-        reasons.append("FDV/liquidez desconocido o excesivo")
+        add('fdv_liquidity', "FDV/liquidez desconocido o excesivo", fdv_ratio is None)
     change = number(row.get("price_change_h1"))
     if change is None or not policy.min_price_change_h1 <= change <= policy.max_price_change_h1:
-        reasons.append("variación de precio desconocida o extrema")
+        add('price_change', "variación de precio desconocida o extrema", change is None)
     market_score = number(row.get("market_score"), 0)
     if market_score is None or market_score > policy.max_market_score:
-        reasons.append("múltiples señales de riesgo de mercado")
-    return reasons
+        add('market_risk', "múltiples señales de riesgo de mercado", market_score is None)
+    return checks
+
+
+def quality_reasons(row, policy):
+    return [check['reason'] for check in quality_checks(row, policy)]
 
 
 def passes_quality_filter(row, max_age_hours=48, min_liquidity=20000):

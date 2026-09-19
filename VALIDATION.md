@@ -1,28 +1,34 @@
-# Validación v0.7.0 — tres perfiles de simulación
+# Validación v0.8.0 — búsqueda y medición prospectiva
 
-18 de septiembre de 2026. Base de implementación: `main` en `cda7736`. La validación anterior se conserva en [VALIDATION_V060.md](docs/VALIDATION_V060.md).
+19 de septiembre de 2026. Base: `main` en `8d1eda0`. Validación anterior: [VALIDATION_V070.md](docs/VALIDATION_V070.md).
 
 ## Pruebas reproducibles
 
-167 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni servicios externos; la conexión WebSocket usa un servidor local. Ejecutar:
+202 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni APIs externas; el test WebSocket usa un servidor local.
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Se conservan las 138 comprobaciones anteriores y se añaden 29 para:
+Se conservan las 167 comprobaciones anteriores y se añaden 35 para:
 
-- Aislamiento de decisiones, umbrales distintos, confirmación temporal por plan y tamaño, datos críticos ausentes y rechazo de riesgos en los tres perfiles.
-- Una única recogida de evidencia por observación, cotizaciones por tamaño solo tras las comprobaciones previas y trabajo histórico acotado.
-- Distribución 600+300+100, reinicios sin duplicar saldo, migración sin actividad y bloqueo si hubo movimientos o cambia el plan.
-- Límites compartidos de exposición y pérdidas, todas las salidas antes de cualquier entrada y revisión del límite después de consultar la red.
-- Salidas sin ruta, recuperación, pausa, invalidación por perfil, rollback de débito y posiciones, y controles que abarcan las tres carteras.
-- Avisos con IDs independientes y activación única; informes por perfil y separación de cohortes por la huella del plan.
+- Lotes con identidad exacta de tokens y pools, caché acotada y fechas de proveedor con nanosegundos compatibles con Python 3.9.
+- Datos desconocidos que no aprueban, edad pendiente y riesgos conocidos independientes de campos ausentes.
+- Creaciones fuera de la cola profunda, migraciones, cupos de confirmación y exploración, prioridad de posiciones abiertas y descansos que sobreviven a reinicios.
+- Fallos de proveedores, ciclos sin candidatos, observaciones persistidas y repetidas después de reiniciar el escáner.
+- Muestra fijada antes de consultar, cantidad exacta, costes, rutas ausentes, reinicios, cupos diarios, vencimientos y rechazo de respuestas tardías.
+- Informes por versión, evaluación sin nuevos escaneos y conservación de saldos durante el estudio.
 
-La CI de esta versión ejecuta Python 3.9, 3.12 y 3.13 y una prueba Docker con dos arranques sobre el mismo volumen, para comprobar persistencia del reparto. Consultar [Actions](https://github.com/u5468654071-boop/memecoin-scanner/actions) para el resultado del commit publicado; la existencia del workflow no implica que ya haya pasado.
+El test de stream antiguo podía terminar a los 250 ms antes de recibir mensajes en un runner lento. Ahora termina después de procesar el evento y su duplicado, con un límite de seguridad de 10 segundos. Mantiene la comprobación real de conexión y deduplicación.
+
+La CI ejecuta Python 3.9, 3.12 y 3.13 y Docker con persistencia sobre el mismo volumen. El resultado del commit publicado se consulta en [Actions](https://github.com/u5468654071-boop/memecoin-scanner/actions); la existencia del workflow no demuestra por sí sola que haya pasado.
+
+## Preflight con APIs reales
+
+La prueba aislada del 18 de septiembre recogió 60 direcciones de Jupiter y preseleccionó 30 en un lote: 5 listas para análisis completo y 25 aplazadas por edad, pool, activo de cotización o liquidez. Las 3 analizadas después tenían actividad orgánica vigente y grupos de concentración reportados. Los tres perfiles las rechazaron por sus comprobaciones de riesgo. No se escribieron señales nuevas de entrada ni se modificaron saldos en ese preflight.
+
+Es una comprobación pequeña del flujo, no una comparación estadística con v0.7. La versión añade tablas, conserva la huella del plan y los saldos 600/300/100, y comienza su propia confirmación temporal. Los archivos de configuración privados y los datos del servidor no se publican.
 
 ## Alcance
 
-Los tests de lógica usan mercados y cotizaciones sintéticos. El funcionamiento operativo se verifica por separado en el VPS: copia consistente, tres servicios, capital agregado, perfil de cada observación y entrega del aviso de activación. Los resultados en vivo se conservan en el volumen privado, no en este repositorio.
-
-No se ha demostrado rentabilidad, superioridad de filtros ni ejecución real. Los perfiles comparten universo y límites; sus retornos no son ensayos independientes. Se necesita historial prospectivo suficiente y declarar cotizaciones ausentes, costes supuestos y períodos sin valoración. El sistema sigue siendo exclusivamente de simulación.
+Las pruebas validan comportamiento de software con fixtures y fallos controlados. La disponibilidad real de datos se informa por separado. La actualización mantiene las políticas de riesgo y añade preselección, seguimiento y el protocolo de [RESEARCH.md](RESEARCH.md). No demuestra que los filtros sean óptimos, que la estrategia gane dinero ni que las cotizaciones se ejecuten a esos precios. Todo sigue en simulación.

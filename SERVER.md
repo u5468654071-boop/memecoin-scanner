@@ -1,4 +1,4 @@
-# VPS: escaneo y simulación automática v0.7.0
+# VPS: escaneo y simulación automática v0.8.0
 
 Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.7.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.8.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -29,6 +29,7 @@ EXIT_API_RESERVE=5000
 SCAN_INTERVAL_SECONDS=60
 PAPER_INTERVAL_SECONDS=60
 SCAN_MAX_TOKENS=3
+DISCOVERY_LIMIT=30
 ```
 
 El límite diario es **por proveedor y día UTC**, compartido entre procesos, no por cada contenedor. El escáner deja de consultar al llegar a 15.000 con estos valores; el simulador puede utilizar el resto hasta 20.000. Las revisiones de salida tienen prioridad dentro de cada ciclo del simulador. La reserva reduce la competencia por cuota, pero no garantiza cobertura continua: las API pueden fallar o agotar su cuota. Ambos procesos comparten una separación mínima de 1,1 segundos entre llamadas de un mismo proveedor y las pausas solicitadas por él. Otras aplicaciones con la misma clave no comparten este contador.
@@ -45,6 +46,7 @@ docker compose up -d
 docker compose ps
 docker compose logs --tail=60 scanner paper
 docker compose exec paper python server.py report
+docker compose exec paper python server.py coverage
 ```
 
 Usa `config --quiet`: la salida completa de `docker compose config` podría mostrar variables del entorno. Los contenedores funcionan como usuario sin privilegios, con sistema de archivos de solo lectura salvo datos y `/tmp`. No se copian claves a la imagen. Los logs de Docker rotan; los datos históricos de SQLite y el CSV crecen y necesitan espacio y copias periódicas.
@@ -52,6 +54,16 @@ Usa `config --quiet`: la salida completa de `docker compose config` podría most
 `restart: unless-stopped` reinicia procesos que terminan y permite recuperar el servicio cuando Docker arranca. El estado `healthy` solo indica progreso reciente del bucle (últimos 15 minutos), **no** calidad de datos, conexión satisfactoria a Jupiter ni rentabilidad. Docker no reinicia automáticamente un proceso solo por estar `unhealthy`: consulta los logs y, si procede, usa `docker compose restart scanner paper`. Puedes activar el servicio opcional de [avisos por Telegram](TELEGRAM.md); requiere vincularlo antes de enviar mensajes.
 
 El informe muestra saldo ficticio, posiciones, cierres, resultado y bloqueos de entrada por perfil, además del agregado. Incluye rentabilidad ficticia, aciertos, factor de beneficio y drawdown de las valoraciones observadas, con sus limitaciones. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
+
+## Búsqueda y medición prospectiva
+
+`DISCOVERY_LIMIT` controla el tamaño de las listas (1–100); `SCAN_MAX_TOKENS` limita el análisis profundo (1–20). Son límites distintos. La preselección examina un lote de hasta 30 tokens por ciclo con una consulta Jupiter y una DexScreener. Usa identidades exactas, datos vigentes, el pool y la edad conocidos; `ready` solo significa pendiente de análisis completo. Las reservas de riesgo no se relajan.
+
+Con tres análisis por ciclo, se reservan hasta dos para confirmar candidatas y uno para explorar; las posiciones abiertas tienen prioridad de actualización. Si no hay novedades se utiliza la capacidad restante para confirmar. El seguimiento continuo de una moneda pendiente tiene una ventana de 30 minutos. Los riesgos se revisan tras 15 minutos, los datos incompletos tras tres minutos; reaparecer en una lista no borra el descanso. Los eventos tempranos permanecen en SQLite y no saturan directamente el análisis profundo.
+
+El comando `coverage` muestra preselección, repeticiones de observación, causas de datos ausentes y resultados del estudio de [RESEARCH.md](RESEARCH.md). También aparecen en `scanner-report.json`. La cobertura analiza las últimas 24 horas con un máximo declarado de 5.000 observaciones, separando la versión actual. Las muestras del estudio se separan por versión y plan y usan la cuota del escáner, incluida su reserva para el servicio de salidas.
+
+Al actualizar desde v0.7 se conservan los saldos y el plan 600/300/100. Solo se añaden tablas; las observaciones anteriores siguen disponibles. La confirmación temporal empieza con los datos de la nueva versión. El estudio no abre posiciones en las carteras, no envía avisos de compras y no usa dinero real.
 
 ## Reglas de las tres carteras ficticias
 

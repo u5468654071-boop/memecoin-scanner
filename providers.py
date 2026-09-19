@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import time
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
@@ -35,6 +36,9 @@ def timestamp(value):
     if not isinstance(value, str):
         return None
     try:
+        # Tokens V2 emite fracciones de nanosegundo; Python 3.9 solo acepta 3/6 dígitos.
+        value = re.sub(r'\.(\d{1,9})(?=Z$|[+-]\d{2}:\d{2}$)',
+                       lambda m:'.'+m[1][:6].ljust(6,'0'),value)
         result = dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
         return result.timestamp() if result.tzinfo is not None else None
     except (ValueError, OverflowError):
@@ -258,10 +262,14 @@ def holder_evidence(rpc, mint, supply_raw, slot, report):
 def network_evidence(report):
     """Usa grupos que reporta RugCheck, sin atribuir identidades ni sumar grupos solapados."""
     result = {'status': 'unavailable', 'source': 'rugcheck_insider_networks', 'groups': [],
-              'max_group_supply_pct': None, 'independently_verified': False}
+              'max_group_supply_pct': None, 'independently_verified': False, 'reason_codes': []}
     networks = obj(report).get('insiderNetworks')
     supply = integer(obj(obj(report).get('token')).get('supply'), 1)
-    if not isinstance(networks, list) or supply is None:
+    if not isinstance(networks, list):
+        result['reason_codes'].append('networks_not_reported')
+    if supply is None:
+        result['reason_codes'].append('supply_not_reported')
+    if result['reason_codes']:
         return result
     for network in networks:
         network = obj(network)
@@ -269,6 +277,7 @@ def network_evidence(report):
         size = integer(network.get('size'), 1, 100000000)
         if amount is None or size is None or amount > supply:
             result['status'] = 'incomplete'
+            result['reason_codes'].append('malformed_network')
             return result
         result['groups'].append({'id': str(network.get('id', 'unknown')), 'type': str(network.get('type', 'unknown')),
                                  'size': size, 'supply_pct': amount / supply * 100,
@@ -281,6 +290,7 @@ def network_evidence(report):
 class Jupiter:
     def __init__(self, transport):
         self.transport = transport
+        self.prefetched = {}
 
     @property
     def enabled(self):
@@ -303,14 +313,41 @@ class Jupiter:
         now = time.time() if now is None else now
         if not self.enabled:
             return {'status': 'not_configured'}
+        cached = self.prefetched.get(mint)
+        if cached and 0 <= now - cached[0] <= 30:
+            return self.parse_token(cached[1], now, max_age, received_at=cached[0])
         data = self.transport.get('https://api.jup.ag/tokens/v2/search?' + urlencode({'query': mint}))
         match = next((r for r in data if isinstance(r, dict) and r.get('id') == mint), None) if isinstance(data, list) else None
+        return self.parse_token(match, now, max_age)
+
+    def prefetch(self, mints, now=None, max_age=300):
+        """Un lote de hasta 100 identidades exactas; nunca sustituir mints ausentes."""
+        mints = list(dict.fromkeys(mints))
+        if not mints or len(mints) > 100 or any(not valid_address('solana', mint) for mint in mints):
+            raise ValueError('Lote Jupiter inválido')
+        if not self.enabled:
+            return {mint: {'status': 'not_configured'} for mint in mints}
+        data = self.transport.get('https://api.jup.ag/tokens/v2/search?' + urlencode({'query': ','.join(mints)}))
+        if not isinstance(data, list):
+            raise RuntimeError('Jupiter: lote inválido')
+        received = time.time() if now is None else now
+        matches, duplicates = {}, set()
+        for item in data:
+            if isinstance(item, dict) and isinstance(item.get('id'), str) and item['id'] in mints:
+                if item['id'] in matches:
+                    duplicates.add(item['id'])
+                matches[item['id']] = item
+        self.prefetched = {mint: (received, matches.get(mint) if mint not in duplicates else None) for mint in mints}
+        return {mint: self.parse_token(item, received, max_age) for mint, (_, item) in self.prefetched.items()}
+
+    @staticmethod
+    def parse_token(match, now, max_age=300, received_at=None):
         if match is None:
             return {'status': 'unavailable'}
         updated = timestamp(match.get('updatedAt'))
         score = number(match.get('organicScore'), 0, 100)
         result = {'status': 'ok', 'source': 'jupiter', 'organic_score': score, 'updated_at': updated,
-                  'received_at': now, 'decimals': integer(match.get('decimals'), 0, 18),
+                  'received_at': now if received_at is None else received_at, 'decimals': integer(match.get('decimals'), 0, 18),
                   'holder_count': number(match.get('holderCount'), 0), 'windows': {},
                   'first_pool_at': timestamp(obj(match.get('firstPool')).get('createdAt')),
                   'flagged_suspicious': 'isSus' in obj(match.get('audit'))}
@@ -321,6 +358,8 @@ class Jupiter:
                                                       'buyOrganicVolume', 'sellOrganicVolume')}
         if updated is None or updated > now + 30 or now - updated > max_age:
             result['status'] = 'stale'
+            result['reason_code'] = ('timestamp_missing' if updated is None else
+                                     ('timestamp_in_future' if updated > now + 30 else 'timestamp_expired'))
         elif score is None or result['decimals'] is None:
             result['status'] = 'incomplete'
         return result
@@ -362,3 +401,21 @@ class Jupiter:
                 'round_trip_loss_pct': float((1 - returned / Decimal(str(amount_usdc))) * 100),
                 'returned_usdc': float(returned),
                 'limitations': 'Cotizaciones independientes sin ejecutar; no incluyen necesariamente gas, MEV ni impacto propio.'}
+
+
+def batch_pairs(transport, chain, mints):
+    """Preselección DEX (máximo 30 mints). No sustituye la lectura del pool al analizar."""
+    mints = list(dict.fromkeys(mints))
+    if not mints or len(mints) > 30 or any(not valid_address(chain, mint) for mint in mints):
+        raise ValueError('Lote de pares inválido')
+    data = transport.get('https://api.dexscreener.com/tokens/v1/' + chain + '/' + ','.join(mints))
+    if not isinstance(data, list):
+        raise RuntimeError('DexScreener: lote de pares inválido')
+    grouped = {mint: [] for mint in mints}
+    for pair in data:
+        if not isinstance(pair, dict) or pair.get('chainId') != chain:
+            continue
+        mint = obj(pair.get('baseToken')).get('address')
+        if isinstance(mint, str) and mint in grouped:
+            grouped[mint].append(pair)
+    return grouped

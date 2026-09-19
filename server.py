@@ -31,7 +31,7 @@ def env_int(name, default, lower, upper):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Servidor de escaneo y cartera ficticia; no opera dinero real')
-    parser.add_argument('command', choices=('scan', 'paper', 'report', 'health', 'pause', 'resume', 'close-all', 'backup'))
+    parser.add_argument('command', choices=('scan', 'paper', 'report', 'coverage', 'health', 'pause', 'resume', 'close-all', 'backup'))
     parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
     parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
     parser.add_argument('--profiles', type=Path, default=os.environ.get('PAPER_PROFILES_FILE'))
@@ -47,6 +47,14 @@ def main(argv=None):
     if args.command == 'health':
         return 0 if healthy(root / (args.service + '.heartbeat.json')) else 1
     root.mkdir(parents=True, exist_ok=True)
+    if args.command == 'coverage':
+        from discovery import DiscoveryQueue, coverage_report
+        from forward_study import ForwardStudy
+        with ObservationStore(db_path) as store:
+            result = {'coverage':coverage_report(store), 'discovery':DiscoveryQueue(store, None).report(),
+                      'forward_study':ForwardStudy(store).report()}
+        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        return 0
     if args.command in ('pause', 'close-all'):
         pause_path.touch(mode=0o600)
         if args.command == 'close-all':
@@ -105,6 +113,7 @@ def main(argv=None):
         scan_interval = env_int('SCAN_INTERVAL_SECONDS', 60, 10, 300)
         paper_interval = env_int('PAPER_INTERVAL_SECONDS', 60, 10, 60)
         max_tokens = env_int('SCAN_MAX_TOKENS', 3, 1, 20)
+        discovery_limit = env_int('DISCOVERY_LIMIT', 30, 1, 100)
         if not os.environ.get('JUPITER_API_KEY', '').strip():
             raise ValueError('Falta JUPITER_API_KEY en el entorno del servicio')
     except (ValueError, OSError) as exc:
@@ -113,7 +122,7 @@ def main(argv=None):
     if args.command == 'scan':
         from scanner_v05 import main as scan
         return scan(['--watch', '--with-stream', '--interval', str(scan_interval), '--cycles', str(args.cycles),
-                     '--max-tokens', str(max_tokens), '--limit', str(max_tokens),
+                     '--max-tokens', str(max_tokens), '--limit', str(discovery_limit),
                      '--candidates', 'boosted,profiles,jupiter,jupiter-organic' if plan else 'boosted,profiles,jupiter',
                      '--sizes-usdc', ','.join(map(str, plan.sizes)) if plan else str(policy.order_usdc),
                      '--daily-api-limit', str(daily-reserve), '--db', str(db_path),

@@ -1,8 +1,8 @@
-# Memecoin Scanner v0.7.0
+# Memecoin Scanner v0.8.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 167 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
+Estado: versión de investigación, con 202 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
@@ -11,6 +11,18 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 ## Tres perfiles en el VPS
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
+
+## Mejoras de búsqueda y evaluación v0.8
+
+Con `--profiles profiles.json`, una cola persistente preselecciona pools DEX por lotes antes de gastar consultas profundas. El VPS descubre hasta 30 tokens por fuente y mantiene el límite de tres análisis completos por ciclo. Los eventos de creación quedan registrados; una migración o una lista de mercado puede llevar el token a preselección. Se reserva capacidad para confirmar candidatas y revisar posiciones abiertas.
+
+Las comprobaciones distinguen datos ausentes, umbrales incumplidos y edad pendiente. Ningún dato desconocido se convierte en una aprobación. Se mantienen las asignaciones, límites y filtros críticos del plan de tres carteras.
+
+Una muestra prospectiva determinista compara cotizaciones de monedas seleccionadas y descartadas a 1, 2 y 4 horas: hasta 24 muestras nuevas al día, 10 USDC hipotéticos, costes asumidos y fallos visibles. No debita las carteras ni constituye una simulación de sus stops. Consulta [RESEARCH.md](RESEARCH.md).
+
+```bash
+docker compose exec paper python server.py coverage
+```
 
 ## Arranque rápido
 
@@ -56,7 +68,7 @@ python memecoin_scanner.py --watch --candidates boosted,profiles,jupiter --inter
 python memecoin_scanner.py --watch --cycles 2 --limit 2 --max-tokens 2
 ```
 
-Estos comandos de la CLI no instalan servicios; el despliegue continuo con Docker se describe en SERVER.md. El intervalo es un mínimo: si las consultas tardan más, el siguiente ciclo empieza al terminar. Se atienden los vencimientos de seguimiento antes del lote y entre tokens. Los candidatos pendientes se intercalan con nuevos descubrimientos, priorizando pendientes menos recientemente analizados. Los rechazados esperan al menos 15 minutos entre reanálisis y los incompletos 5 minutos; reaparecer en una lista no salta ese descanso. Las direcciones manuales se revisan en cada ciclo. La cola activa considera tokens vistos por primera vez en las últimas 72 horas; el historial no se borra.
+Estos comandos sin `--profiles` conservan la cola anterior. No instalan servicios; el despliegue continuo con Docker se describe en SERVER.md. El intervalo es un mínimo: si las consultas tardan más, el siguiente ciclo empieza al terminar. Se atienden los vencimientos de seguimiento antes del lote y entre tokens. Los candidatos pendientes se intercalan con nuevos descubrimientos, priorizando pendientes menos recientemente analizados. Los rechazados esperan al menos 15 minutos entre reanálisis y los incompletos 5 minutos; reaparecer en una lista no salta ese descanso. Las direcciones manuales se revisan en cada ciclo. La cola activa considera tokens vistos por primera vez en las últimas 72 horas; el historial no se borra.
 
 El stream utiliza una conexión y solo `subscribeNewToken` / `subscribeMigration`. Deduplica eventos, reconecta y registra huecos. **No promete recuperar eventos no recibidos**: los intervalos sin conexión aparecen en el informe. Si el proveedor no envía `blockTime`, conserva la hora de recepción sin presentarla como hora de creación on-chain. Un sufijo `pump` no se usa como prueba de origen.
 
@@ -114,7 +126,7 @@ Las alertas candidatas caducan a los 5 minutos. Se renuevan al volver a superar 
 
 ## Evaluar utilidad sin inventar un backtest
 
-Cada observación prepara dos mediciones a 1, 6 y 24 horas:
+Además del estudio de v0.8 descrito en [RESEARCH.md](RESEARCH.md), cada observación conserva dos mediciones históricas a 1, 6 y 24 horas:
 
 1. Precio indicativo del mismo par: conserva la referencia v0.4.
 2. Cotización de venta de la cantidad de tokens que habría dado la cotización inicial de compra. La salida puede usar otra ruta/pool, pero debe ser del mismo mint.

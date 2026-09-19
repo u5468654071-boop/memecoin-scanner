@@ -51,6 +51,10 @@ class ObservationStore(Store):
             );
             CREATE INDEX IF NOT EXISTS obs_token_time ON observations(chain,token,observed_at);
         ''')
+        from discovery import create_queue
+        create_queue(self.db)
+        from forward_study import create_study
+        create_study(self.db)
 
     def reserve_call(self, provider, limit, now=None, min_interval=0):
         """Devuelve espera sin consumir cuota, o 0 al reservar una llamada ahora."""

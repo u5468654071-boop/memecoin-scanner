@@ -17,6 +17,8 @@ from pathlib import Path
 
 import memecoin_scanner as legacy
 from engine import Engine, EnhancedPolicy
+from discovery import DiscoveryQueue, coverage_report
+from forward_study import ForwardStudy
 from observation_store import ObservationStore
 from providers import Transport
 from run_lock import ScanLock
@@ -142,7 +144,9 @@ def main(argv=None):
     try:
         with ObservationStore(args.db) as store:
             if args.report:
-                print(json.dumps({'market': store.report(), 'enhanced': store.report_enhanced()}, ensure_ascii=False, indent=2))
+                print(json.dumps({'market': store.report(), 'enhanced': store.report_enhanced(),
+                                  'coverage': coverage_report(store), 'forward_study': ForwardStudy(store).report()},
+                                 ensure_ascii=False, indent=2))
                 return 0
             if args.alerts:
                 print(json.dumps(store.alerts(), ensure_ascii=False, indent=2))
@@ -160,7 +164,11 @@ def main(argv=None):
                 parser.error(str(exc))
             legacy.CLIENT = transport
             engine = Engine(store, transport, policy, enhanced, sizes, profile_plan=profile_plan)
+            queue = DiscoveryQueue(store, profile_plan, args.interval) if profile_plan and args.chain=='solana' else None
+            study = ForwardStudy(store) if queue else None
             if args.evaluate:
+                if study:
+                    study.evaluate(engine.jupiter)
                 store.evaluate_due(transport.get, max_tasks=2 if profile_plan else None)
                 store.evaluate_exits(engine.jupiter, max_tasks=2 if profile_plan else None)
                 print(json.dumps(store.report_enhanced(), ensure_ascii=False, indent=2))
@@ -184,11 +192,14 @@ def main(argv=None):
             while True:
                 start = time.monotonic()
                 heartbeat(args.heartbeat, 'evaluating')
+                if study:
+                    study.evaluate(engine.jupiter)
                 # El seguimiento se atiende antes del siguiente lote de análisis.
                 store.evaluate_due(transport.get, max_tasks=2 if profile_plan else None)
                 store.evaluate_exits(engine.jupiter, max_tasks=2 if profile_plan else None)
                 heartbeat(args.heartbeat, 'discovering')
                 errors = []
+                discovery_stats = None
                 if manual is not None:
                     provenance = {mint: ['manual'] for mint in manual}
                 else:
@@ -211,25 +222,35 @@ def main(argv=None):
                             errors.append(str(exc))
                     for mint in found:
                         store.note_token(args.chain, mint)
-                    # Reservar al menos la mitad de cada lote a la cola más antigua.
-                    pending = store.due_tokens(args.chain, args.max_tokens, interval=args.interval,
-                                               prioritize_observing=profile_plan is not None)
-                    provenance = {}
-                    queues = [(mint, ['watchlist']) for mint in pending]
-                    fresh = [(mint, source) for mint, source in found.items()
-                             if store.is_due(args.chain, mint, interval=args.interval)]
-                    for i in range(max(len(queues), len(fresh))):
-                        for source in (queues, fresh):
-                            if i < len(source):
-                                mint, origin = source[i]
-                                provenance.setdefault(mint, [])
-                                provenance[mint] = list(dict.fromkeys(provenance[mint] + origin))
+                    if queue:
+                        queue.offer(found)
+                        queue.import_migrations()
+                        discovery_stats = queue.refresh(engine.jupiter, transport)
+                        errors.extend(discovery_stats['errors'])
+                        provenance = queue.select(args.max_tokens)
+                    else:
+                        pending = store.due_tokens(args.chain, args.max_tokens, interval=args.interval)
+                        provenance = {}
+                        queues = [(mint, ['watchlist']) for mint in pending]
+                        fresh = [(mint, source) for mint, source in found.items()
+                                 if store.is_due(args.chain, mint, interval=args.interval)]
+                        for i in range(max(len(queues), len(fresh))):
+                            for source in (queues, fresh):
+                                if i < len(source):
+                                    mint, origin = source[i]
+                                    provenance.setdefault(mint, [])
+                                    provenance[mint] = list(dict.fromkeys(provenance[mint] + origin))
                 run_id, rows = uuid.uuid4().hex, []
                 for mint, origin in list(provenance.items())[:args.max_tokens]:
                     heartbeat(args.heartbeat, 'analyzing')
                     print('Analizando ' + mint, file=sys.stderr)
                     row = engine.analyze(args.chain, mint, origin)
-                    store.record_enriched(row, run_id)
+                    observation_id = store.record_enriched(row, run_id)
+                    if queue:
+                        queue.analyzed(row)
+                    if study:
+                        study.evaluate(engine.jupiter,limit=1)
+                        study.enroll(row,observation_id,engine.jupiter)
                     rows.append(row)
                     heartbeat(args.heartbeat, 'evaluating')
                     # Evitar que un escaneo largo abandone todos los plazos de evaluación.
@@ -241,6 +262,11 @@ def main(argv=None):
                           'rows': rows, 'alerts': store.alerts(), 'configuration': {
                               'jupiter_configured': engine.jupiter.enabled, 'sizes_usdc': sizes,
                               'daily_api_limit_per_provider': args.daily_api_limit}}
+                if queue:
+                    result['discovery'] = {**queue.report(), 'cycle':discovery_stats,
+                                           'limit_per_source':args.limit, 'max_deep_analyses':args.max_tokens}
+                    result['coverage'] = coverage_report(store)
+                    result['forward_study'] = study.report()
                 emit_result(args.json_output, result)
                 candidates = [r for r in rows if r['quality_pass']]
                 print(f'\n{len(candidates)}/{len(rows)} candidatos. Prioridad de investigación, no probabilidad de beneficio.')
@@ -250,7 +276,8 @@ def main(argv=None):
                     priority = f"{row['research_score']:.1f}" if row['research_score'] is not None else '—'
                     print(f"{row['state']:18} {symbol[:20]:20} prioridad {priority:>5} | {row['lifecycle']['phase']:18} {reasons}")
                 print(f'JSON: {args.json_output} | Historial: {args.db}')
-                code = 0 if rows and any(r['analysis_status'] == 'ok' for r in rows) else 2
+                code = 0 if ((rows and any(r['analysis_status'] == 'ok' for r in rows))
+                             or (queue and not errors and manual is None)) else 2
                 cycle += 1
                 heartbeat(args.heartbeat, 'waiting')
                 if not args.watch or (args.cycles and cycle >= args.cycles):
