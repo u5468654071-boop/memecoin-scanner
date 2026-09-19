@@ -70,7 +70,8 @@ class Transport:
               and parsed.port in (None, 443) and payload is None):
             provider = {'api.dexscreener.com': 'dexscreener', 'api.rugcheck.xyz': 'rugcheck',
                         'api.jup.ag': 'jupiter'}.get(parsed.hostname)
-            if provider == 'jupiter' and parsed.path not in ('/tokens/v2/search', '/tokens/v2/recent', '/tokens/v2/toporganicscore/5m', '/swap/v2/order'):
+            if provider == 'jupiter' and parsed.path not in ('/tokens/v2/search', '/tokens/v2/recent', '/tokens/v2/toporganicscore/5m',
+                                                           '/tokens/v2/toptraded/5m', '/tokens/v2/toptrending/1h', '/swap/v2/order'):
                 raise RuntimeError('Endpoint Jupiter no permitido')
         else:
             provider = None
@@ -277,7 +278,8 @@ def network_evidence(report):
         size = integer(network.get('size'), 1, 100000000)
         if amount is None or size is None or amount > supply:
             result['status'] = 'incomplete'
-            result['reason_codes'].append('malformed_network')
+            result['reason_codes'].append('network_amount_exceeds_supply' if amount is not None and amount > supply
+                                          else 'malformed_network')
             return result
         result['groups'].append({'id': str(network.get('id', 'unknown')), 'type': str(network.get('type', 'unknown')),
                                  'size': size, 'supply_pct': amount / supply * 100,
@@ -308,6 +310,28 @@ class Jupiter:
             raise RuntimeError('Jupiter: lista de actividad orgánica inválida')
         return list(dict.fromkeys(item['id'] for item in data
                     if isinstance(item, dict) and valid_address('solana', item.get('id'))))[:limit]
+
+    def discover_market(self, limit, category, max_age_hours=168, now=None):
+        """Amplía el universo; aparecer en una lista no aprueba ningún filtro."""
+        paths = {'traded': 'toptraded/5m', 'trending': 'toptrending/1h'}
+        if category not in paths or not 1 <= limit <= 100:
+            raise ValueError('Categoría o límite de descubrimiento inválido')
+        data = self.transport.get('https://api.jup.ag/tokens/v2/' + paths[category] + '?limit=100')
+        if not isinstance(data, list):
+            raise RuntimeError('Jupiter: lista de mercado inválida')
+        now = time.time() if now is None else now
+        selected = []
+        for item in data:
+            if not isinstance(item, dict) or not valid_address('solana', item.get('id')):
+                continue
+            first = timestamp(obj(item.get('firstPool')).get('createdAt'))
+            # Descartar edades conocidas incompatibles antes de limitar la lista.
+            # Las desconocidas siguen a preselección; jamás se dan por verificadas.
+            if first is not None and (first > now + 30 or now-first > max_age_hours*3600):
+                continue
+            if item['id'] not in selected:
+                selected.append(item['id'])
+        return selected[:limit]
 
     def token(self, mint, now=None, max_age=300):
         now = time.time() if now is None else now

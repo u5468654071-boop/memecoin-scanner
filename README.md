@@ -1,8 +1,8 @@
-# Memecoin Scanner v0.8.1
+# Memecoin Scanner v0.9.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 204 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
+Estado: versión de investigación, con 212 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
@@ -12,9 +12,11 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
 
-## Mejoras de búsqueda y evaluación v0.8
+## Selección y evaluación v0.9
 
 Con `--profiles profiles.json`, una cola persistente preselecciona pools DEX por lotes antes de gastar consultas profundas. El VPS descubre hasta 30 tokens por fuente y mantiene el límite de tres análisis completos por ciclo. Los eventos de creación quedan registrados; una migración o una lista de mercado puede llevar el token a preselección. Se reserva capacidad para confirmar candidatas y revisar posiciones abiertas.
+
+El VPS añade listas Jupiter de mayor actividad (5 minutos) y tendencia (1 hora): consulta 100 resultados por categoría, elimina edades conocidas incompatibles y conserva hasta 30 por lista. Antes del análisis profundo, edad, liquidez, Organic Score y compradores deben encajar conjuntamente en al menos un perfil. Ninguna lista aprueba una entrada. Las revisitas comparten capacidad con nuevos tokens para evitar que una llegada continua las bloquee.
 
 Las comprobaciones distinguen datos ausentes, umbrales incumplidos y edad pendiente. Ningún dato desconocido se convierte en una aprobación. Se mantienen las asignaciones, límites y filtros críticos del plan de tres carteras.
 

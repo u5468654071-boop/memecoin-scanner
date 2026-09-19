@@ -123,7 +123,7 @@ def main(argv=None):
         from scanner_v05 import main as scan
         return scan(['--watch', '--with-stream', '--interval', str(scan_interval), '--cycles', str(args.cycles),
                      '--max-tokens', str(max_tokens), '--limit', str(discovery_limit),
-                     '--candidates', 'boosted,profiles,jupiter,jupiter-organic' if plan else 'boosted,profiles,jupiter',
+                     '--candidates', 'boosted,profiles,jupiter,jupiter-organic,jupiter-market' if plan else 'boosted,profiles,jupiter',
                      '--sizes-usdc', ','.join(map(str, plan.sizes)) if plan else str(policy.order_usdc),
                      '--daily-api-limit', str(daily-reserve), '--db', str(db_path),
                      '--log', str(root / 'scan_log.csv'), '--json-output', str(root / 'scanner-report.json'),

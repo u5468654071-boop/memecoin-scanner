@@ -1,38 +1,45 @@
-# Validación v0.8.1 — búsqueda y medición prospectiva
+# Validación v0.9.0 — cobertura y selección del universo
 
-19 de septiembre de 2026. Base: `main` en `8d1eda0`. Validación anterior: [VALIDATION_V070.md](docs/VALIDATION_V070.md).
+19 de septiembre de 2026. Base: `main` en `3ebbb29`. [Validación anterior](https://github.com/u5468654071-boop/memecoin-scanner/blob/3ebbb29fbaf8a2ea42635d1fe0d1fcbcbe35daa5/VALIDATION.md).
+
+## Problema medido
+
+Entre 08:10 y 10:06 UTC, v0.8.1 guardó 18 observaciones de 18 tokens, todas rechazadas. En 16 el Organic Score era cero y faltaban compradores orgánicos; en 13 faltaba un informe utilizable de grupos relacionados. Las cuotas de proveedores no estaban agotadas. La cola dedicaba capacidad a novedades sin actividad suficiente; su contador `ready` incluía evidencia caducada y tokens aún en descanso.
+
+Es una ventana pequeña, no una explicación de todas las horas anteriores. El programa no suspende el escaneo los sábados. No se ha demostrado rentabilidad ni que sus umbrales sean óptimos.
+
+## Cambios comprobados
+
+- Nuevas listas `toptraded/5m` y `toptrending/1h`, con 100 resultados por consulta y hasta 30 direcciones por fuente después de excluir edades conocidas incompatibles. Identidades exactas y endpoints de solo lectura.
+- Preselección conjunta por perfil: edad, liquidez, Organic Score y compradores orgánicos de 5 minutos. No combinar la edad tolerada del conservador con los requisitos de actividad del agresivo. Los datos ausentes aplazan y se pueden volver a consultar.
+- Capacidad compartida entre fuentes de actividad, otras listas y migraciones; primeras consultas y revisitas se alternan. Los huecos sobrantes se ceden.
+- Informe que distingue evidencia reciente, descansos, datos vencidos, rechazo del perfil y cotizaciones omitidas por controles previos.
+- Un grupo de RugCheck cuyo importe supera el suministro sigue siendo incompleto, con el motivo `network_amount_exceeds_supply`. No se recorta a 100 % ni se sustituye por cero.
+
+El plan de riesgo, capital 600/300/100, tamaños 50/25/10, controles LP, propietarios, redes, trayectoria y costes permanecen iguales. Las observaciones de versiones anteriores se conservan, pero no confirman candidaturas de la nueva versión.
 
 ## Pruebas reproducibles
 
-204 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni APIs externas; el test WebSocket usa un servidor local.
+212 pruebas pasan con Python 3.9.6 local y Python 3.12 dentro del contenedor del VPS. Se mantienen las 204 anteriores y se añaden ocho que reproducen los casos de esta revisión.
 
 ```bash
 python -m unittest discover -s tests -v
+docker compose exec paper python server.py coverage
 ```
 
-Se conservan las 167 comprobaciones anteriores y se añaden 37 para:
+La CI ejecuta Python 3.9, 3.12 y 3.13, más una comprobación Docker con persistencia. Consultar el estado del commit publicado en [Actions](https://github.com/u5468654071-boop/memecoin-scanner/actions).
 
-- Lotes con identidad exacta de tokens y pools, caché acotada y fechas de proveedor con nanosegundos compatibles con Python 3.9.
-- Datos desconocidos que no aprueban, edad pendiente y riesgos conocidos independientes de campos ausentes.
-- Creaciones fuera de la cola profunda, migraciones, cupos de confirmación y exploración, prioridad de posiciones abiertas y descansos que sobreviven a reinicios.
-- Fallos de proveedores, ciclos sin candidatos, observaciones persistidas y repetidas después de reiniciar el escáner.
-- Muestra fijada antes de consultar, cantidad exacta, costes, rutas ausentes, reinicios, cupos diarios, vencimientos y rechazo de respuestas tardías.
-- Informes por versión, evaluación sin nuevos escaneos y conservación de saldos durante el estudio.
+## Prueba con proveedores reales
 
-El test de stream antiguo podía terminar a los 250 ms antes de recibir mensajes en un runner lento. Ahora termina después de procesar el evento y su duplicado, con un límite de seguridad de 10 segundos. Mantiene la comprobación real de conexión y deduplicación.
+El preflight v0.9 encontró 27 direcciones de actividad y 23 de tendencia: 40 distintas. Seis pasaron la preselección; las tres examinadas a fondo fueron rechazadas por LP insuficiente, cambios extremos de precio y/o datos incompletos, según perfil. Las dos listas respondieron sin errores. No se guardaron señales de entrada ni se modificaron carteras; las llamadas se contabilizaron en la cuota compartida.
 
-La CI ejecuta Python 3.9, 3.12 y 3.13 y Docker con persistencia sobre el mismo volumen. El resultado del commit publicado se consulta en [Actions](https://github.com/u5468654071-boop/memecoin-scanner/actions); la existencia del workflow no demuestra por sí sola que haya pasado.
+No es una comparación simultánea ni aleatoria con v0.8.1 y no permite afirmar mayor rentabilidad. Los datos reales cambian, por lo que no se espera reproducir los mismos recuentos. El estudio prospectivo solo cubre los tokens que alcanzan análisis profundo; no todos los descartados en preselección.
 
-## Preflight con APIs reales
+## Fuentes técnicas y límites
 
-La prueba aislada del 18 de septiembre recogió 60 direcciones de Jupiter y preseleccionó 30 en un lote: 5 listas para análisis completo y 25 aplazadas por edad, pool, activo de cotización o liquidez. Las 3 analizadas después tenían actividad orgánica vigente y grupos de concentración reportados. Los tres perfiles las rechazaron por sus comprobaciones de riesgo. No se escribieron señales nuevas de entrada ni se modificaron saldos en ese preflight.
+- [Jupiter Tokens V2](https://developers.jup.ag/docs/tokens/token-information): categorías, ventanas, lotes y fecha del primer pool. La fecha del primer pool no es necesariamente la fecha de creación del mint.
+- [Organic Score](https://developers.jup.ag/docs/tokens): indicador del proveedor sobre actividad; no es probabilidad de beneficio ni prueba de identidades independientes.
+- [RugCheck OpenAPI](https://api.rugcheck.xyz/swagger/doc.json): informes y redes relacionadas. Los grupos pueden solaparse y no sustituyen un grafo propio de balances verificados.
+- [DexScreener API](https://docs.dexscreener.com/api/reference): pares y lotes. Se selecciona un pool del token base con activo de cotización admitido.
 
-Es una comprobación pequeña del flujo, no una comparación estadística con v0.7. La versión añade tablas, conserva la huella del plan y los saldos 600/300/100, y comienza su propia confirmación temporal. Los archivos de configuración privados y los datos del servidor no se publican.
-
-## Ajuste operativo v0.8.1
-
-El primer arranque de v0.8.0 importó más de 900 migraciones pendientes y el orden global por antigüedad retrasaba las listas actuales. Se reserva ahora capacidad de preselección 20/10 entre listas y migraciones, cediendo los huecos sobrantes; las migraciones nuevas se atienden antes que las antiguas sin consultar. Dos pruebas adicionales reproducen el atasco y comprueban que no se desperdicia capacidad. No se modifican los filtros ni el protocolo prospectivo.
-
-## Alcance
-
-Las pruebas validan comportamiento de software con fixtures y fallos controlados. La disponibilidad real de datos se informa por separado. La actualización mantiene las políticas de riesgo y añade preselección, seguimiento y el protocolo de [RESEARCH.md](RESEARCH.md). No demuestra que los filtros sean óptimos, que la estrategia gane dinero ni que las cotizaciones se ejecuten a esos precios. Todo sigue en simulación.
+Las pruebas verifican comportamiento del software, no rentabilidad. Todo continúa en simulación y las cotizaciones independientes no garantizan ejecución real, costes completos ni ausencia de manipulación.

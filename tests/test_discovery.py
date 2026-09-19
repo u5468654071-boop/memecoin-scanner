@@ -24,6 +24,27 @@ def token_info(mint=TOKEN, at=NOW):
 
 
 class BatchingTests(unittest.TestCase):
+    def test_market_lists_filter_known_old_tokens_before_limit_and_keep_identity(self):
+        transport = Mock(jupiter_key='fixture')
+        old = token_info(OWNER1)
+        old['firstPool']['createdAt'] = utc_string(NOW-169*3600)
+        future = token_info(OWNER2)
+        future['firstPool']['createdAt'] = utc_string(NOW+60)
+        transport.get.return_value = [old,future,token_info(),token_info(),{'id':'invalid'}]
+        jup = Jupiter(transport)
+        self.assertEqual(jup.discover_market(1,'traded',now=NOW),[TOKEN])
+        self.assertEqual(transport.get.call_args.args[0],'https://api.jup.ag/tokens/v2/toptraded/5m?limit=100')
+        self.assertEqual(jup.discover_market(1,'trending',now=NOW),[TOKEN])
+        self.assertIn('toptrending/1h',transport.get.call_args.args[0])
+        with self.assertRaises(ValueError):
+            jup.discover_market(1,'execute')
+
+    def test_invalid_market_response_is_a_visible_error(self):
+        transport = Mock(jupiter_key='fixture')
+        transport.get.return_value = {'error':'unavailable'}
+        with self.assertRaises(RuntimeError):
+            Jupiter(transport).discover_market(30,'traded')
+
     def test_nanosecond_provider_timestamp_is_not_reported_as_missing(self):
         self.assertEqual(timestamp('2026-09-18T20:10:21.034234634Z'),timestamp('2026-09-18T20:10:21.034234Z'))
         self.assertIsNone(timestamp('2026-09-18T20:10:21.034234634'))
@@ -67,6 +88,35 @@ class BatchingTests(unittest.TestCase):
 
 
 class ScreeningTests(unittest.TestCase):
+    def test_prescreen_must_match_one_whole_profile_not_a_mix_of_thresholds(self):
+        plan = ProfilePlan.load(PLAN_PATH)
+        data = organic()
+        data.update(organic_score=30,first_pool_at=NOW-100*3600)
+        result = screen(TOKEN,[pair()],data,NOW,20000,168,2/60,plan.profiles)
+        self.assertEqual(result['stage'],'deferred')
+        self.assertEqual(result['evidence']['compatible_profiles'],[])
+        self.assertIn('no_compatible_profile',result['reasons'])
+        data['first_pool_at'] = NOW-2*3600
+        self.assertEqual(screen(TOKEN,[pair()],data,NOW,20000,168,2/60,plan.profiles)['evidence']['compatible_profiles'],['aggressive'])
+
+    def test_missing_buyers_wait_and_recover_when_provider_reports_activity(self):
+        plan = ProfilePlan.load(PLAN_PATH)
+        data = organic()
+        del data['windows']['5m']['numOrganicBuyers']
+        result = screen(TOKEN,[pair()],data,NOW,20000,168,2/60,plan.profiles)
+        self.assertIn('organic_buyers_missing',result['reasons'])
+        self.assertEqual(result['stage'],'deferred')
+        data['windows']['5m']['numOrganicBuyers'] = 25
+        self.assertEqual(screen(TOKEN,[pair()],data,NOW,20000,168,2/60,plan.profiles)['stage'],'ready')
+
+    def test_network_amount_over_supply_is_not_clamped_into_approval(self):
+        data = report()
+        data['insiderNetworks'] = [{'id':'fixture','size':2,'tokenAmount':int(data['token']['supply'])+1}]
+        result = network_evidence(data)
+        self.assertEqual(result['status'],'incomplete')
+        self.assertIsNone(result['max_group_supply_pct'])
+        self.assertEqual(result['reason_codes'],['network_amount_exceeds_supply'])
+
     def screen(self, pairs, data=None):
         return screen(TOKEN,pairs,organic() if data is None else data,NOW,20000,168,2/60)
 
@@ -199,6 +249,39 @@ class QueueTests(unittest.TestCase):
         transport = Mock()
         transport.get.return_value = []
         self.assertEqual(self.queue.refresh(jup,transport,now=NOW,limit=3)['probed'],3)
+
+    def test_arrival_stream_and_due_revisits_both_receive_screening_capacity(self):
+        self.queue.offer({TOKEN:['jupiter_recent']},NOW-500)
+        with self.store.db:
+            self.store.db.execute('UPDATE discovery_v8 SET last_probe=?,next_probe=?',(NOW-400,NOW-220))
+        self.queue.offer({OWNER1:['jupiter_market_traded'],OWNER2:['jupiter_recent']},NOW)
+        jup = Mock()
+        jup.prefetch.side_effect = lambda mints,now:{m:{'status':'unavailable'} for m in mints}
+        transport = Mock()
+        transport.get.return_value = []
+        self.queue.refresh(jup,transport,now=NOW,limit=2)
+        self.assertEqual(set(jup.prefetch.call_args.args[0]),{TOKEN,OWNER1})
+
+    def test_ready_report_excludes_expired_evidence_and_deep_cooldown(self):
+        self.ready([TOKEN,OWNER1,OWNER2])
+        with self.store.db:
+            self.store.db.execute('UPDATE discovery_v8 SET last_probe=? WHERE mint=?',(NOW-301,OWNER1))
+            self.store.db.execute('UPDATE discovery_v8 SET next_full=? WHERE mint=?',(NOW+60,OWNER2))
+        result = self.queue.report(NOW)
+        self.assertEqual(result['ready_and_due'],1)
+        self.assertEqual(result['ready_with_expired_probe'],1)
+        self.assertEqual(list(self.queue.select(3,NOW)),[TOKEN])
+
+    def test_coverage_separates_skipped_quotes_from_route_errors(self):
+        row = confirmed(self.plan)
+        row['profiles']['aggressive']['exit_quotes'][0]['status'] = 'not_requested'
+        row['profiles']['balanced']['exit_quotes'][0]['status'] = 'unavailable'
+        row['profiles']['balanced']['decision_checks']['blockers'] = ['fixture risk']
+        self.store.record_enriched(row,'quotes')
+        profiles = coverage_report(self.store,now=NOW)['profiles']
+        self.assertEqual(profiles['aggressive']['quote_statuses'],{'not_requested':1})
+        self.assertEqual(profiles['balanced']['quote_statuses'],{'unavailable':1})
+        self.assertEqual(profiles['balanced']['decision_blockers'],{'fixture risk':1})
 
     def test_open_position_gets_followup_even_if_screening_is_deferred(self):
         portfolio = ProfilePortfolio(self.store,self.plan)
