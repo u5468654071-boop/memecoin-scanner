@@ -165,7 +165,9 @@ class Notifications:
         if text:
             self.queue(key + ':' + str(revision), text, now)
 
-    def collect(self, now):
+    def collect(self, now=None):
+        health_time = now
+        now = time.time() if now is None else now
         binding = self.binding()
         if not binding or not binding['chat_id']:
             return
@@ -223,7 +225,9 @@ class Notifications:
                             'SIMULACIÓN · VALORACIÓN RECUPERADA\n' + label if previous and previous['state'] == 'failed' else None)
                 self.transition('valuation:'+ident, 'failed' if failed else 'ok', text, now)
             for service in ('scanner', 'paper'):
-                ok = healthy(self.root / (service+'.heartbeat.json'), now=now)
+                # En producción, healthy toma la hora DESPUÉS de leer el archivo.
+                # Otra tarea puede publicar un heartbeat durante la lectura del ledger.
+                ok = healthy(self.root / (service+'.heartbeat.json'), now=health_time)
                 if not ok and now-binding['paired_at'] < 180:
                     continue
                 previous = self.db.execute('SELECT state FROM transitions WHERE key=?', ('service:'+service,)).fetchone()
@@ -304,7 +308,7 @@ def main(argv=None):
                     if not isinstance(updates, list):
                         raise TelegramError()
                     notifications.accept_updates(updates, time.time())
-                notifications.collect(time.time())
+                notifications.collect()
                 notifications.deliver_one(client, time.time())
                 heartbeat(path, 'paired' if notifications.binding()['chat_id'] else 'awaiting_pair')
             except TelegramError as exc:
