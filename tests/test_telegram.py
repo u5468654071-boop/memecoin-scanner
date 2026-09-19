@@ -146,6 +146,20 @@ class NotificationTests(unittest.TestCase):
         self.n.collect(NOW+1004)
         self.assertEqual(self.n.status()['pending'], 7)
 
+    def test_concurrent_heartbeat_is_not_mistaken_for_a_future_timestamp(self):
+        self.pair()
+        heartbeat(self.root/'scanner.heartbeat.json', 'waiting', NOW+1000.1)
+        heartbeat(self.root/'paper.heartbeat.json', 'waiting', NOW+1000.1)
+        # La recolección empieza antes de la escritura; cada health lee el reloj después.
+        with patch('telegram_notifications.time.time', side_effect=[NOW+1000,NOW+1000.2,NOW+1000.3]):
+            self.n.collect()
+        self.assertEqual(self.n.status()['pending'],1)  # Solo el mensaje de vinculación.
+        # Un timestamp realmente futuro sigue siendo un fallo.
+        heartbeat(self.root/'scanner.heartbeat.json', 'waiting', NOW+1100)
+        with patch('telegram_notifications.time.time', return_value=NOW+1001):
+            self.n.collect()
+        self.assertEqual(self.n.status()['pending'],2)
+
     def test_status_is_offline_and_hides_destination(self):
         self.pair()
         with patch('sys.stdout', new_callable=io.StringIO) as output, patch('telegram_notifications.TelegramClient') as client:
