@@ -1,16 +1,16 @@
-# Validación v0.8.0 — búsqueda y medición prospectiva
+# Validación v0.8.1 — búsqueda y medición prospectiva
 
 19 de septiembre de 2026. Base: `main` en `8d1eda0`. Validación anterior: [VALIDATION_V070.md](docs/VALIDATION_V070.md).
 
 ## Pruebas reproducibles
 
-202 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni APIs externas; el test WebSocket usa un servidor local.
+204 pruebas pasan localmente con Python 3.9.6 y websockets 15.0.1. No necesitan claves ni APIs externas; el test WebSocket usa un servidor local.
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Se conservan las 167 comprobaciones anteriores y se añaden 35 para:
+Se conservan las 167 comprobaciones anteriores y se añaden 37 para:
 
 - Lotes con identidad exacta de tokens y pools, caché acotada y fechas de proveedor con nanosegundos compatibles con Python 3.9.
 - Datos desconocidos que no aprueban, edad pendiente y riesgos conocidos independientes de campos ausentes.
@@ -28,6 +28,10 @@ La CI ejecuta Python 3.9, 3.12 y 3.13 y Docker con persistencia sobre el mismo v
 La prueba aislada del 18 de septiembre recogió 60 direcciones de Jupiter y preseleccionó 30 en un lote: 5 listas para análisis completo y 25 aplazadas por edad, pool, activo de cotización o liquidez. Las 3 analizadas después tenían actividad orgánica vigente y grupos de concentración reportados. Los tres perfiles las rechazaron por sus comprobaciones de riesgo. No se escribieron señales nuevas de entrada ni se modificaron saldos en ese preflight.
 
 Es una comprobación pequeña del flujo, no una comparación estadística con v0.7. La versión añade tablas, conserva la huella del plan y los saldos 600/300/100, y comienza su propia confirmación temporal. Los archivos de configuración privados y los datos del servidor no se publican.
+
+## Ajuste operativo v0.8.1
+
+El primer arranque de v0.8.0 importó más de 900 migraciones pendientes y el orden global por antigüedad retrasaba las listas actuales. Se reserva ahora capacidad de preselección 20/10 entre listas y migraciones, cediendo los huecos sobrantes; las migraciones nuevas se atienden antes que las antiguas sin consultar. Dos pruebas adicionales reproducen el atasco y comprueban que no se desperdicia capacidad. No se modifican los filtros ni el protocolo prospectivo.
 
 ## Alcance
 

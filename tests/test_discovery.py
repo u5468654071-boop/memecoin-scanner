@@ -180,6 +180,26 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(self.queue.select(3,NOW))
         self.assertEqual(self.queue.refresh(jup,transport,now=NOW+1)['probed'],0)
 
+    def test_migration_backlog_cannot_starve_current_market_lists(self):
+        self.queue.offer({OWNER2:['pumpportal_migration']},NOW-900)
+        self.queue.offer({ACCOUNT1:['pumpportal_migration']},NOW-300)
+        self.queue.offer({TOKEN:['jupiter_recent'],OWNER1:['jupiter_organic']},NOW)
+        jup = Mock()
+        jup.prefetch.side_effect = lambda mints,now:{m:{'status':'unavailable'} for m in mints}
+        transport = Mock()
+        transport.get.return_value = []
+        result = self.queue.refresh(jup,transport,now=NOW,limit=3)
+        self.assertEqual(result['probed'],3)
+        self.assertEqual(set(jup.prefetch.call_args.args[0]),{TOKEN,OWNER1,ACCOUNT1})
+
+    def test_unused_screening_capacity_is_available_to_other_lane(self):
+        self.queue.offer({m:['pumpportal_migration'] for m in (TOKEN,OWNER1,OWNER2)},NOW)
+        jup = Mock()
+        jup.prefetch.side_effect = lambda mints,now:{m:{'status':'unavailable'} for m in mints}
+        transport = Mock()
+        transport.get.return_value = []
+        self.assertEqual(self.queue.refresh(jup,transport,now=NOW,limit=3)['probed'],3)
+
     def test_open_position_gets_followup_even_if_screening_is_deferred(self):
         portfolio = ProfilePortfolio(self.store,self.plan)
         oid = self.store.record_enriched(confirmed(self.plan),'fixture')

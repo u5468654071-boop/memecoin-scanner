@@ -1,4 +1,4 @@
-# VPS: escaneo y simulación automática v0.8.0
+# VPS: escaneo y simulación automática v0.8.1
 
 Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.8.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.8.1 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -137,3 +137,5 @@ docker compose -p restauracion run --rm --no-deps paper report
 Verifica saldos y posiciones antes de arrancar con `docker compose -p restauracion up -d`. Las entradas permanecen pausadas hasta ejecutar `resume`; la valoración y las reglas de salida empiezan al arrancar. No sobrescribas una base abierta ni mezcles un archivo restaurado con los antiguos archivos `-wal` y `-shm`.
 
 Referencias operativas: [Compose services](https://docs.docker.com/reference/compose-file/services/) y [políticas de reinicio](https://docs.docker.com/engine/containers/start-containers-automatically/).
+
+Desde v0.8.1, la preselección reserva 20 de los 30 huecos a tokens de listas de mercado y 10 a migraciones; los huecos no utilizados se ceden al otro grupo. Entre migraciones aún no consultadas, se atienden primero las más recientes. Así, importar el historial del stream no bloquea durante decenas de ciclos las listas actuales.
