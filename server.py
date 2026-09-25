@@ -9,6 +9,7 @@ import sys
 import time
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 
 from observation_store import ObservationStore
 from paper_trading import PaperLedger, PaperPolicy
@@ -31,7 +32,7 @@ def env_int(name, default, lower, upper):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Servidor de escaneo y cartera ficticia; no opera dinero real')
-    parser.add_argument('command', choices=('scan', 'paper', 'report', 'coverage', 'health', 'pause', 'resume', 'close-all', 'backup'))
+    parser.add_argument('command', choices=('scan', 'paper', 'report', 'performance', 'coverage', 'health', 'pause', 'resume', 'close-all', 'backup'))
     parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
     parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
     parser.add_argument('--profiles', type=Path, default=os.environ.get('PAPER_PROFILES_FILE'))
@@ -39,12 +40,30 @@ def main(argv=None):
     parser.add_argument('--service', choices=('scanner', 'paper'), default='paper')
     parser.add_argument('--cycles', type=int, default=0, help='Solo pruebas acotadas; 0 es continuo')
     parser.add_argument('--backup-to', type=Path)
+    parser.add_argument('--since', help='Inicio inclusivo ISO 8601 con zona horaria; solo performance')
+    parser.add_argument('--until', help='Fin exclusivo ISO 8601 con zona horaria; solo performance')
     args = parser.parse_args(argv)
     if args.cycles < 0:
         parser.error('cycles debe ser >=0')
+    if args.command != 'performance' and (args.since is not None or args.until is not None):
+        parser.error('--since y --until solo se usan con performance')
     root = args.data_dir
     db_path = root / 'scanner.sqlite3'
     pause_path, close_path = root / 'PAUSE', root / 'CLOSE_ALL'
+    if args.command == 'performance':
+        from performance import performance_report
+        from providers import timestamp
+        until = time.time() if args.until is None else timestamp(args.until)
+        since = until - 7 * 86400 if args.since is None and until is not None else timestamp(args.since)
+        if since is None or until is None or not 0 <= since < until:
+            parser.error('Intervalo inválido: usa fechas ISO 8601 con zona horaria e inicio anterior al fin')
+        if not db_path.is_file():
+            parser.error('performance necesita una base existente; no crea ni inicializa carteras')
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as db:
+            db.row_factory = sqlite3.Row
+            result = performance_report(SimpleNamespace(db=db), since, until)
+        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        return 0
     if args.command == 'health':
         return 0 if healthy(root / (args.service + '.heartbeat.json')) else 1
     root.mkdir(parents=True, exist_ok=True)

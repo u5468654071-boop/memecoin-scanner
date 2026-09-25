@@ -45,6 +45,79 @@ def timestamp(value):
         return None
 
 
+def quote_provenance(data):
+    """Diagnóstico acotado del /order; nunca transacciones, wallets ni blobs arbitrarios.
+
+    Campos documentados en jup-ag/docs/openapi-spec/swap/v2/swap.yaml.
+    priceImpact usa puntos porcentuales; el campo legado priceImpactPct usa una razón.
+    Los costes reportados ya están en la cotización: conservarlos no los aplica otra vez.
+    """
+    result = {}
+    for source, target in (('requestId','request_id'), ('quoteId','quote_id')):
+        value = data.get(source)
+        if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',value):
+            result[target] = value
+    for source, target, allowed in (
+            ('mode','mode',('ultra','manual')), ('swapMode','swap_mode',('ExactIn',)),
+            ('router','router',('metis','jupiterz','dflow','okx'))):
+        if data.get(source) in allowed:
+            result[target] = data[source]
+    for source,target,minimum,maximum in (
+            ('priceImpact','price_impact_percentage_points',None,None),
+            ('priceImpactPct','legacy_price_impact_ratio',None,None),
+            ('slippageBps','slippage_bps',0,10000), ('inUsdValue','input_usd_value',0,None),
+            ('outUsdValue','output_usd_value',0,None), ('feeBps','total_fee_bps',0,10000)):
+        value = number(data.get(source),minimum,maximum)
+        if value is not None:
+            result[target] = value
+    for source,target in (('otherAmountThreshold','minimum_output_raw'),
+                          ('lastValidBlockHeight','last_valid_block_height')):
+        value = integer(data.get(source))
+        if value is not None:
+            result[target] = str(value)
+    if valid_address('solana',data.get('feeMint')):
+        result['fee_mint'] = data['feeMint']
+    expiry = timestamp(data.get('expireAt'))
+    if expiry is not None:
+        result['expires_at'] = expiry
+    fee = obj(data.get('platformFee'))
+    platform = {}
+    amount, bps = integer(fee.get('amount')), number(fee.get('feeBps'),0,10000)
+    if amount is not None:
+        platform['amount_raw'] = str(amount)
+    if bps is not None:
+        platform['bps'] = bps
+    if valid_address('solana',fee.get('feeMint')):
+        platform['mint'] = fee['feeMint']
+    if platform:
+        result['platform_fee'] = platform
+    route = data.get('routePlan')
+    if isinstance(route,list):
+        result['route_step_count'] = len(route)
+        result['route_truncated'] = len(route)>16
+        steps = []
+        for item in route[:16]:
+            info, step = obj(obj(item).get('swapInfo')), {}
+            for source,target in (('ammKey','amm_key'),('inputMint','input_mint'),('outputMint','output_mint')):
+                if valid_address('solana',info.get(source)):
+                    step[target] = info[source]
+            label = info.get('label')
+            if isinstance(label,str) and 0<len(label)<=64 and label.isprintable():
+                step['label'] = label
+            for source,target in (('inAmount','input_raw'),('outAmount','output_raw')):
+                value = integer(info.get(source))
+                if value is not None:
+                    step[target] = str(value)
+            for source,maximum in (('percent',100),('bps',10000)):
+                value = number(obj(item).get(source),0,maximum)
+                if value is not None:
+                    step[source] = value
+            if step:
+                steps.append(step)
+        result['route_steps'] = steps
+    return result
+
+
 class Transport:
     def __init__(self, store, daily_limit=2000, rpc_url=None, jupiter_key=None, timeout=10):
         self.store, self.daily_limit = store, daily_limit
@@ -370,6 +443,7 @@ class Jupiter:
             return {'status': 'unavailable'}
         updated = timestamp(match.get('updatedAt'))
         score = number(match.get('organicScore'), 0, 100)
+        # Tokens V2 documenta isSus por presencia, incluso false/null; no convertirlo a bool.
         result = {'status': 'ok', 'source': 'jupiter', 'organic_score': score, 'updated_at': updated,
                   'received_at': now if received_at is None else received_at, 'decimals': integer(match.get('decimals'), 0, 18),
                   'holder_count': number(match.get('holderCount'), 0), 'windows': {},
@@ -401,8 +475,10 @@ class Jupiter:
                 or data.get('errorCode') is not None or data.get('error') or data.get('transaction') not in (None, '')):
             raise RuntimeError('Jupiter: cotización ausente, identidad incorrecta o ruta no utilizable')
         return {'input_mint': input_mint, 'output_mint': output_mint, 'in_amount': str(amount),
-                'out_amount': str(integer(data['outAmount'], 1)), 'router': data.get('router'),
-                'fee_bps_reported': number(data.get('feeBps'), 0), 'received_at': time.time()}
+                'out_amount': str(integer(data['outAmount'], 1)),
+                'router': data.get('router') if data.get('router') in ('metis','jupiterz','dflow','okx') else None,
+                'fee_bps_reported': number(data.get('feeBps'), 0, 10000), 'received_at': time.time(),
+                'provenance':quote_provenance(data)}
 
     def round_trip(self, mint, amount_usdc, max_age=30):
         if not self.enabled:

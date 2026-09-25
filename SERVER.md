@@ -1,4 +1,4 @@
-# VPS: escaneo y simulación automática v0.10.0
+# VPS: escaneo y simulación automática v0.11.0
 
 Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.10.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.11.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -47,6 +47,7 @@ docker compose ps
 docker compose logs --tail=60 scanner paper
 docker compose exec paper python server.py report
 docker compose exec paper python server.py coverage
+docker compose exec paper python server.py performance
 ```
 
 Usa `config --quiet`: la salida completa de `docker compose config` podría mostrar variables del entorno. Los contenedores funcionan como usuario sin privilegios, con sistema de archivos de solo lectura salvo datos y `/tmp`. No se copian claves a la imagen. Los logs de Docker rotan; los datos históricos de SQLite y el CSV crecen y necesitan espacio y copias periódicas.
@@ -56,6 +57,10 @@ Usa `config --quiet`: la salida completa de `docker compose config` podría most
 El informe muestra saldo ficticio, posiciones, cierres, resultado y bloqueos de entrada por perfil, además del agregado. Incluye rentabilidad ficticia, aciertos, factor de beneficio y drawdown de las valoraciones observadas, con sus limitaciones. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
 
 ## Búsqueda y medición prospectiva
+
+`performance` consulta SQLite en modo de solo lectura y no llama a APIs ni inicializa carteras. Por defecto usa los últimos siete días; `--since` y `--until` aceptan ISO 8601 con zona horaria, con inicio inclusivo y fin exclusivo. Agrupa cierres por perfil, versión de la observación de entrada y huella del plan. Su resultado realizado no equivale a la variación del patrimonio durante el intervalo: las posiciones aún abiertas no tienen una valoración histórica inventada.
+
+La actualización v0.11 añade evidencia de salida a las tablas de posiciones, conservando los cierres anteriores sin atribuirles motivos que no registraron. Antes de desplegar, guardar una copia SQLite consistente, comprobar el plan y consultar posiciones abiertas. Si se actualiza con posiciones de una versión anterior, la nueva comprobación conservadora puede solicitar salida por evidencia incompatible. Es preferible realizar el cambio cuando no quedan posiciones. Un rollback de código conserva las columnas adicionales y el histórico; no restaurar una copia antigua sobre operaciones posteriores.
 
 `DISCOVERY_LIMIT` controla el tamaño de las listas (1–100); `SCAN_MAX_TOKENS` limita el análisis profundo (1–20). Son límites distintos. La preselección examina un lote de hasta 30 tokens por ciclo con una consulta Jupiter y una DexScreener. Usa identidades exactas, datos vigentes, el pool y la edad conocidos; `ready` solo significa pendiente de análisis completo. Las reservas de riesgo no se relajan.
 

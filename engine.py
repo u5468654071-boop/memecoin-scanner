@@ -90,6 +90,73 @@ def trajectory(row, history, policy, now):
     return result
 
 
+def position_risk(row, policy):
+    """Safety of an existing position, independent of eligibility for a new buy.
+
+    The ledger obtains its own quote for the actual held quantity. Entry age,
+    a positive price ceiling and rebuilding temporal confirmation do not by
+    themselves make that position unsafe. Current missing critical data does.
+    """
+    checks = []
+
+    def add(code, reason, missing=False):
+        checks.append({'code': code, 'status': 'missing' if missing else 'blocked', 'reason': reason})
+
+    if row.get('lifecycle', {}).get('phase') in (None, 'detected', 'bonding_curve', 'unknown'):
+        add('lifecycle', 'fase de mercado sin validación para mantener la posición', True)
+    mint = row.get('mint_check', {})
+    if mint.get('status') != 'ok':
+        details = mint.get('reasons')
+        reason = ('; '.join(details) if isinstance(details, list) and details
+                  and all(isinstance(r, str) and r for r in details)
+                  else 'comprobación del mint bloqueada o incompleta')
+        add('mint', reason, mint.get('status') != 'blocked')
+    if row.get('has_danger_flag') is True or row.get('rugged') is True:
+        add('critical_risk', 'riesgo crítico reportado por RugCheck')
+    if row.get('pool_check', {}).get('status') != 'reported':
+        add('pool', 'sin evidencia LP del pool exacto', True)
+    holders = row.get('holders', {})
+    owner = legacy.number(holders.get('top1_pct_lower_bound'), 0, 100)
+    top10 = legacy.number(holders.get('top10_pct_lower_bound'), 0, 100)
+    if holders.get('status') != 'ok' or owner is None or top10 is None:
+        add('holders', 'propietarios de las mayores cuentas sin resolver', True)
+    elif owner > policy.max_owner_pct or top10 > policy.max_top10_pct:
+        add('holders', 'concentración elevada en propietarios de la muestra')
+    networks = row.get('networks', {})
+    group = legacy.number(networks.get('max_group_supply_pct'), 0, 100)
+    if networks.get('status') != 'reported' or group is None:
+        add('networks', 'informe de grupos relacionados incompleto', True)
+    elif group > policy.max_network_pct:
+        add('networks', 'grupo relacionado reportado por encima del umbral')
+    organic = row.get('organic', {})
+    score = legacy.number(organic.get('organic_score'), 0, 100)
+    buyers = legacy.number(legacy.obj(legacy.obj(organic.get('windows')).get('5m')).get('numOrganicBuyers'), 0)
+    if organic.get('flagged_suspicious'):
+        add('suspicious', 'Jupiter marca el token como sospechoso')
+    if organic.get('status') != 'ok' or score is None or buyers is None:
+        add('organic_data', 'actividad orgánica ausente o caducada', True)
+    elif score < policy.min_organic_score or buyers < policy.min_organic_buyers_5m:
+        add('organic_activity', 'actividad orgánica actual inferior al umbral')
+    path = row.get('trajectory', {})
+    if path.get('status') == 'deteriorating':
+        for reason in path.get('reasons') or ['deterioro de la trayectoria']:
+            add('trajectory', reason)
+    elif path.get('status') not in ('sustained', 'warming_up', 'incomplete'):
+        add('trajectory', 'trayectoria no interpretable', True)
+    for check in row['market_checks']:
+        # A known age is an entry window; unknown age remains missing evidence.
+        if check['code'] == 'age' and check['status'] != 'missing':
+            continue
+        # Preserve the downside guard, but do not sell solely for exceeding an
+        # entry ceiling after a positive move. Other market-risk checks remain.
+        change = legacy.number(row.get('price_change_h1'))
+        if (check['code'] == 'price_change' and check['status'] == 'blocked'
+                and change is not None and change > row['policy']['max_price_change_h1']):
+            continue
+        checks.append(dict(check))
+    return {'schema': 1, 'status': 'exit' if checks else 'hold', 'checks': checks}
+
+
 def decide(row, policy):
     hard, missing, wait = [], [], []
     phase = row['lifecycle']['phase']
@@ -147,6 +214,7 @@ def decide(row, policy):
                               'waiting': list(dict.fromkeys(wait))}
     row['state'] = 'rejected' if hard else ('insufficient_data' if missing else ('observing' if wait else 'candidate'))
     row['quality_pass'] = row['state'] == 'candidate'
+    row['position_risk'] = position_risk(row, policy)
     row['quality_fail_reasons'] = row['decision_reasons']
     scored = dict(row, quality_pass=True)
     baseline_score = legacy.rank_candidate(scored)[0] if row.get('rugcheck_status') == 'ok' and not reasons else None
@@ -261,7 +329,7 @@ class Engine:
             best = min(row['profiles'].values(), key=lambda p: order[p['state']])
             row['state'], row['quality_pass'] = best['state'], best['quality_pass']
             for key in ('research_score', 'decision_reasons', 'decision_checks', 'quality_fail_reasons',
-                        'dimensions', 'selection_evidence', 'invalidates_if'):
+                        'dimensions', 'selection_evidence', 'invalidates_if', 'position_risk'):
                 row[key] = best[key]
             row['selected_profile_summary'] = best['profile_id']
         return row

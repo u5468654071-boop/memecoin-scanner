@@ -57,9 +57,15 @@ La concentración medida es un límite inferior de la muestra, no una auditoría
 
 Las salidas se intentan con las cotizaciones disponibles aproximadamente cada minuto. Los saltos de precio, rutas ausentes y cuotas pueden causar pérdidas superiores a los umbrales. No se modelan completamente MEV, congestión, gas ni impacto propio. Son operaciones ficticias.
 
+Desde v0.11, `position_risk` distingue el riesgo de una posición abierta de las condiciones para comprar. La edad conocida fuera de la ventana de entrada, una subida superior al máximo de entrada, la espera de nuevas muestras y la ausencia de una nueva cotización de compra no bastan por sí solas para cerrar. Se mantienen los riesgos de mint, LP, propietarios, grupos, liquidez, actividad, caídas de precio y datos críticos desconocidos o caducados. Las cotizaciones de venta se solicitan para la cantidad exacta de la posición; stop, objetivo, trailing y tiempo máximo siguen activos. Los motivos y la observación causante quedan en `exit_evidence` para los cierres nuevos.
+
+El máximo de coste de ida y vuelta también se aplica al valor neto inicial del simulador, después del slippage y los costes fijos supuestos. Una ruta que cumple el límite antes de esos supuestos puede dejar de ser admisible. Esto cambia la lógica de ejecución ficticia, no los valores persistidos del plan, y queda separado bajo la versión v0.11.
+
 ## Informes y cambios del experimento
 
 `docker compose exec paper python server.py report` muestra capital, exposición, resultado, porcentaje de aciertos, factor de beneficio y drawdown observado por perfil. Sin cierres no se inventa una tasa de aciertos. Sin pérdidas, el factor de beneficio es `null`, no infinito. El drawdown solo usa valoraciones disponibles; se cuenta cuándo faltan. Los resultados de cada perfil no son muestras independientes y los límites comunes influyen en las entradas.
+
+`server.py performance` añade una ventana explícita de fechas y cohortes por versión, monedas únicas, reentradas y resultados por moneda. El escenario sin la mejor moneda es un diagnóstico de concentración; no permite eliminar retrospectivamente operaciones de la contabilidad ni prueba que esa moneda fuera predecible.
 
 El plan normalizado y su huella quedan persistidos: cambiar un filtro o presupuesto detiene los servicios hasta restaurar el plan. Para otro experimento se utiliza otro volumen, conservando el anterior. Las comparaciones de cotizaciones separan la huella del plan y los perfiles; no sustituyen la contabilidad de posiciones.
 

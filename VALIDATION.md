@@ -1,4 +1,8 @@
-# Validación v0.9.0 — cobertura y selección del universo
+# Validación
+
+La validación actual de v0.11.0 está en [docs/VALIDATION_V0110.md](docs/VALIDATION_V0110.md). El siguiente informe se conserva como registro de v0.9.0.
+
+## Validación v0.9.0 — cobertura y selección del universo
 
 19 de septiembre de 2026. Base: `main` en `3ebbb29`. [Validación anterior](https://github.com/u5468654071-boop/memecoin-scanner/blob/3ebbb29fbaf8a2ea42635d1fe0d1fcbcbe35daa5/VALIDATION.md).
 

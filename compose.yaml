@@ -1,7 +1,7 @@
 name: memecoin-paper
 x-common: &common
   build: .
-  image: memecoin-scanner:0.10.0
+  image: memecoin-scanner:0.11.0
   env_file: .env.server
   volumes:
     - state:/data
