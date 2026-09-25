@@ -12,7 +12,8 @@ PROFILE_IDS = ('conservative', 'balanced', 'aggressive')
 LABELS = dict(zip(PROFILE_IDS, ('Conservador', 'Equilibrado', 'Agresivo')))
 DECISION_FIELDS = ('policy', 'enhanced_policy', 'trajectory', 'exit_quotes', 'state', 'quality_pass',
                    'decision_checks', 'decision_reasons', 'quality_fail_reasons', 'research_score',
-                   'dimensions', 'selection_evidence', 'invalidates_if', 'profile_id', 'profile_plan_hash', 'market_checks')
+                   'dimensions', 'selection_evidence', 'invalidates_if', 'profile_id', 'profile_plan_hash', 'market_checks',
+                   'position_risk')
 
 
 class ProfilePlan:

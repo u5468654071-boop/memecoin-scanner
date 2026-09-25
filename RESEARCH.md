@@ -1,4 +1,4 @@
-# Estudio prospectivo v0.8
+# Estudio prospectivo: protocolo inicial y revisión v0.11
 
 El objetivo es comprobar si las selecciones y descartes contienen información útil sobre retornos posteriores. No existe todavía una ventaja demostrada ni un sistema ganador validado. Esta primera mejora corrige la recogida de datos y fija cómo se medirán; no optimiza filtros sobre los resultados de la misma muestra.
 
@@ -16,9 +16,11 @@ Los costes son supuestos reproducibles; las cotizaciones pueden incluir otros ca
 
 ## Primera observación y confirmación posterior
 
-La primera observación suele estar esperando confirmación temporal. Si más adelante aparece una señal válida de algún perfil y la muestra inicial no tenía ninguna, se abre una segunda muestra identificada como `forward-10usdc-confirmed-v1`, con nueva cotización inicial y nuevos plazos. Se conservan las etiquetas de la primera muestra: nunca se reclasifica un descarte mirando el futuro. Una señal que ya estaba confirmada en la muestra inicial no se duplica.
+Hasta v0.10, `forward-10usdc-confirmed-v1` registraba únicamente la primera confirmación de cualquier perfil después de una muestra inicial no seleccionada. Una confirmación temprana del agresivo podía impedir estudiar después la del equilibrado o conservador. Sus registros y etiquetas se conservan como históricos.
 
-Ambos estudios comparten el límite de 24 altas al día y los mismos supuestos de costes. Cada moneda puede tener como máximo una muestra de cada tipo por plan y versión. Si se agotó la cuota, la primera señal registrada podría ser posterior a la primera señal detectada. Los informes los separan; pueden compartir monedas y no son muestras independientes ni una comparación causal entre señales y descartes.
+Desde v0.11, cada perfil tiene un estudio `forward-10usdc-confirmed-v2:conservative`, `:balanced` o `:aggressive`. Cada uno registra su primera confirmación disponible bajo la cuota, con cotización y plazos propios. La muestra inicial `forward-10usdc-v1` permanece inmutable, aunque una confirmación coincida con ella. Los estudios reservados en la misma observación comparten la pareja de cotizaciones; una confirmación posterior solicita precios nuevos. Las salidas se calculan con los costes guardados en cada entrada, no con parámetros cambiados posteriormente.
+
+Todos comparten el límite de 24 altas al día, incluidos fallos y reservas iniciales. Cada moneda puede tener como máximo una muestra de cada tipo por plan y versión. Si se agotó la cuota, la primera señal registrada podría ser posterior a la primera señal detectada. El límite se consume por registro de estudio, no por moneda única; confirmar varios perfiles puede reducir la diversidad diaria. Los informes los separan: pueden compartir monedas y no son muestras independientes ni una comparación causal entre señales y descartes.
 
 ## Interpretación del informe
 
@@ -30,6 +32,10 @@ docker compose exec paper python server.py coverage
 
 Las medias y medianas llevan el sufijo `observed_only`: omiten retornos desconocidos y pueden ser optimistas si desaparecen las monedas peores. Hay que publicar cobertura, fallos, tamaño de muestra y sensibilidad a costes conjuntamente. Las filas `all` y las de cada perfil se solapan: no se suman como operaciones independientes.
 
+La revisión v0.11 añade monedas y días únicos, número de entradas cotizadas, salidas observadas y fallidas, mínimo/máximo y concentración de retornos positivos. `leave_best_mint_out` muestra qué ocurre al excluir retrospectivamente la mejor moneda; no selecciona operaciones ni prueba una estrategia. `missing_exit_loss_sensitivity` asigna hipotéticamente −100% a salidas definitivamente no observadas de entradas que sí tuvieron cotización. Excluye entradas sin cotizar y salidas pendientes, y nunca cambia el PnL registrado. La señal `insufficient_evidence` permanece verdadera: estas estadísticas descriptivas no certifican rentabilidad.
+
+Las nuevas cotizaciones conservan un subconjunto acotado de los campos documentados de ruta, impacto, identificadores y comisiones para auditar anomalías. Los campos ausentes siguen ausentes; los importes ya incluidos en la cotización no se cobran de nuevo. Un retorno extremo no se elimina solo por ser extremo.
+
 Las etiquetas no son una asignación aleatoria. Una diferencia entre grupos no demuestra que un filtro la causó. El estudio de 10 USDC tampoco mide stops, dimensionamiento, salidas parciales ni rendimiento de las carteras 600/300/100. Esos resultados se consultan por separado en `server.py report`. Las series anteriores de 1/6/24 horas no se mezclan con este protocolo.
 
 ## Antes de modificar una estrategia
@@ -39,6 +45,8 @@ Primero hay que acumular una muestra prospectiva con cobertura suficiente, inclu
 Quedan para experimentos posteriores entradas específicas para cada fase, salidas parciales y una comprobación independiente de grupos de wallets y bloqueo LP. Esta versión mantiene las reglas y asignaciones de los tres perfiles; mejora búsqueda, seguimiento y diagnóstico sin relajar los controles críticos.
 
 Referencias técnicas de los lotes: [Jupiter Tokens](https://developers.jup.ag/docs/tokens/token-information) y [DexScreener API](https://docs.dexscreener.com/api/reference). Los límites y la disponibilidad de los proveedores se siguen comprobando en ejecución.
+
+La interpretación de cotizaciones sigue [Jupiter Order & Execute](https://developers.jup.ag/docs/swap/order-and-execute). El riesgo de escoger retrospectivamente el mejor experimento está descrito en [The Probability of Backtest Overfitting](https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf) y [The Deflated Sharpe Ratio](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551). Estos trabajos justifican separar experimentos y resultados posteriores; no validan este bot.
 
 ## Universo de selección v0.9.0
 

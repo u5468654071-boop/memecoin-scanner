@@ -99,10 +99,18 @@ class PaperLedger:
                 state TEXT NOT NULL CHECK(state IN ('open','closed')),
                 entry_quote TEXT NOT NULL, exit_quote TEXT,
                 mark_micro INTEGER, mark_at REAL, peak_micro INTEGER,
-                exit_reason TEXT, last_error TEXT, pnl_micro INTEGER
+                exit_reason TEXT, last_error TEXT, pnl_micro INTEGER, exit_evidence TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS {self.index_name} ON {self.positions_table}(mint) WHERE state='open';
         ''')
+        # Additive migration: retain balances, open positions and historical
+        # decisions. Pre-migration exits have unknown attribution (NULL).
+        with self.db:
+            # Obtain the SQLite write lock before inspecting columns: scanner,
+            # paper and reports can initialize their ledgers concurrently.
+            self.db.execute(f'UPDATE {self.positions_table} SET exit_reason=exit_reason WHERE 0')
+            if 'exit_evidence' not in {r['name'] for r in self.db.execute(f'PRAGMA table_info({self.positions_table})')}:
+                self.db.execute(f'ALTER TABLE {self.positions_table} ADD COLUMN exit_evidence TEXT')
         if policy is not None:
             policy.validate()
             encoded = json.dumps(asdict(policy), sort_keys=True)
@@ -144,11 +152,17 @@ class PaperLedger:
             ORDER BY observed_at DESC,id DESC LIMIT 1''', (mint,)).fetchone()
 
     def _payload(self, signal):
-        row = json.loads(signal['payload'])
+        try:
+            row = json.loads(signal['payload'])
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(row, dict):
+            return {}
         if self.profile_id is None:
             return row
-        decision = row.get('profiles', {}).get(self.profile_id)
-        if not decision or row.get('profile_plan_hash') != self.plan_hash:
+        profiles = row.get('profiles')
+        decision = profiles.get(self.profile_id) if isinstance(profiles, dict) else None
+        if not isinstance(decision, dict) or not decision or row.get('profile_plan_hash') != self.plan_hash:
             return {}
         return {**row, **decision}
 
@@ -159,8 +173,51 @@ class PaperLedger:
         return (row.get('scanner_version') == SCANNER_VERSION and row.get('state') == 'candidate'
                 and row.get('quality_pass') is True and valid_address('solana', row.get('base_address'))
                 and row.get('base_address') == signal['token'] and row.get('chain') == 'solana'
+                and self._risk_evidence(signal, now)['status'] == 'hold'
                 and any(q.get('status') == 'quoted' and q.get('amount_usdc') == self.policy.order_usdc
                         for q in row.get('exit_quotes', [])))
+
+    def _risk_evidence(self, signal, now):
+        """Persistable reason for keeping/exiting, including evidence freshness."""
+        evidence = {'schema': 1, 'kind': 'position_risk', 'evaluated_at': now,
+                    'profile': self.profile_id, 'observation_id': signal['id'] if signal else None,
+                    'observed_at': signal['observed_at'] if signal else None,
+                    'status': 'exit', 'checks': []}
+
+        def invalid(code, reason):
+            evidence['checks'].append({'code': code, 'status': 'missing', 'reason': reason})
+            return evidence
+
+        if signal is None:
+            return invalid('risk_observation_missing', 'sin observación de riesgo')
+        row = self._payload(signal)
+        evidence['scanner_version'] = row.get('scanner_version')
+        evidence['profile_plan_hash'] = row.get('profile_plan_hash')
+        if (row.get('scanner_version') != SCANNER_VERSION or row.get('chain') != 'solana'
+                or row.get('base_address') != signal['token']):
+            return invalid('risk_identity', 'versión, perfil o identidad de la observación incompatible')
+        enhanced = row.get('enhanced_policy')
+        max_age = number(enhanced.get('data_max_age_seconds'), 60, 300) if isinstance(enhanced, dict) else None
+        if max_age is None or not 0 <= now - signal['observed_at'] <= max_age:
+            return invalid('risk_observation_stale', 'observación de riesgo caducada o con fecha no válida')
+        organic = row.get('organic')
+        organic_at = number(organic.get('updated_at'), 0) if isinstance(organic, dict) else None
+        market_at = number(row.get('market_received_at'), 0)
+        evidence['source_times'] = {'market_received_at': market_at, 'organic_updated_at': organic_at}
+        if market_at is None or not 0 <= now - market_at <= max_age:
+            return invalid('risk_market_stale', 'datos de mercado caducados o sin fecha válida')
+        if organic_at is None or not -30 <= now - organic_at <= max_age:
+            return invalid('risk_organic_stale', 'datos orgánicos caducados o sin fecha válida')
+        risk = row.get('position_risk')
+        if (not isinstance(risk, dict) or type(risk.get('schema')) is not int or risk['schema'] != 1
+                or risk.get('status') not in ('hold', 'exit') or not isinstance(risk.get('checks'), list)
+                or any(not isinstance(c, dict) or not isinstance(c.get('code'), str) or not c['code']
+                       or c.get('status') not in ('blocked', 'missing', 'waiting')
+                       or not isinstance(c.get('reason'), str) or not c['reason'] for c in risk['checks'])
+                or (risk['status'] == 'hold') != (not risk['checks'])):
+            return invalid('risk_decision_missing', 'decisión de mantenimiento ausente o no interpretable')
+        evidence.update(status=risk['status'], checks=risk['checks'])
+        return evidence
 
     def _quote_ok(self, quote, input_mint, output_mint, amount, now):
         if not isinstance(quote, dict) or integer(amount, 1) is None:
@@ -215,6 +272,11 @@ class PaperLedger:
                 or not self._quote_ok(sell, signal['token'], USDC, buy.get('out_amount'), now)):
             return False
         value = self._net_exit(mark['out_amount'])
+        # The first round trip excludes this ledger's costs and may already be
+        # obsolete. The exact held quantity must also fit the same loss budget,
+        # including entry/exit slippage and both fixed fees.
+        if Decimal(cost - value) * 100 > Decimal(cost) * Decimal(str(limit)):
+            return False
         with self.db:
             # Adquirir escritura antes de revalidar saldo y señal; la red queda fuera de la transacción.
             self.db.execute(f'UPDATE {self.account_table} SET cash_micro=cash_micro WHERE id=1')
@@ -234,14 +296,18 @@ class PaperLedger:
     def refresh_positions(self, jupiter, clock=time.time, close_all=False):
         for pos in self.open_positions():
             now, reason = clock(), pos['exit_reason']
+            evidence = json.loads(pos['exit_evidence']) if pos['exit_evidence'] else None
             latest = self._latest(pos['mint'])
             if (close_all() if callable(close_all) else close_all):
                 reason = reason or 'cierre manual solicitado'
             elif now - pos['opened_at'] >= self.policy.max_hold_seconds:
                 reason = reason or 'tiempo máximo'
-            elif (latest and latest['observed_at'] >= pos['opened_at']
-                  and latest['observed_at'] <= now and not self._payload(latest).get('quality_pass')):
-                reason = reason or 'candidato invalidado'
+            elif not reason:
+                risk = self._risk_evidence(latest, now)
+                if risk['status'] == 'exit':
+                    reason, evidence = 'candidato invalidado', risk
+            if reason and evidence is None:
+                evidence = {'schema': 1, 'kind': 'exit_rule', 'evaluated_at': now, 'reason': reason}
             try:
                 if not jupiter.enabled:
                     raise RuntimeError('Jupiter no configurado')
@@ -251,10 +317,17 @@ class PaperLedger:
                     raise RuntimeError('cotización incompleta o caducada')
             except RuntimeError:
                 with self.db:
-                    self.db.execute(f'''UPDATE {self.positions_table} SET last_error=?,exit_reason=? WHERE id=? AND state='open' ''',
-                        ('sin cotización de salida; saldo permanece comprometido', reason, pos['id']))
+                    self.db.execute(f'''UPDATE {self.positions_table} SET last_error=?,exit_reason=?,exit_evidence=? WHERE id=? AND state='open' ''',
+                        ('sin cotización de salida; saldo permanece comprometido', reason,
+                         json.dumps(evidence) if evidence else None, pos['id']))
                 continue
             value = self._net_exit(quote['out_amount'])
+            if not reason:
+                # A slow quote or a concurrent scanner update can invalidate
+                # the evidence checked before the network request.
+                risk = self._risk_evidence(self._latest(pos['mint']), now)
+                if risk['status'] == 'exit':
+                    reason, evidence = 'candidato invalidado', risk
             peak = max(pos['peak_micro'] or 0, value)
             pnl_pct = (value / pos['cost_micro'] - 1) * 100
             if pnl_pct <= -self.policy.stop_loss_pct:
@@ -266,10 +339,17 @@ class PaperLedger:
                     reason = reason or 'retroceso desde máximo observado'
             if now - pos['opened_at'] >= self.policy.max_hold_seconds:
                 reason = reason or 'tiempo máximo'
+            if reason:
+                evidence = evidence or {'schema': 1, 'kind': 'exit_rule', 'evaluated_at': now, 'reason': reason}
+                # These values also reveal simultaneous price triggers without
+                # overwriting a latched risk/manual exit awaiting a valid route.
+                evidence = {**evidence, 'priced_at': now, 'net_pnl_pct': pnl_pct,
+                            'stop_loss_triggered': pnl_pct <= -self.policy.stop_loss_pct,
+                            'take_profit_triggered': pnl_pct >= self.policy.take_profit_pct}
             with self.db:
                 changed = self.db.execute(f'''UPDATE {self.positions_table} SET mark_micro=?,mark_at=?,peak_micro=?,
-                    last_error=NULL,exit_reason=? WHERE id=? AND state='open' ''',
-                    (value, now, peak, reason, pos['id'])).rowcount
+                    last_error=NULL,exit_reason=?,exit_evidence=? WHERE id=? AND state='open' ''',
+                    (value, now, peak, reason, json.dumps(evidence) if evidence else None, pos['id'])).rowcount
                 if changed and reason:
                     self.db.execute(f'''UPDATE {self.positions_table} SET state='closed',closed_at=?,exit_quote=?,pnl_micro=?
                         WHERE id=?''', (now, json.dumps(quote), value-pos['cost_micro'], pos['id']))
@@ -312,10 +392,10 @@ class PaperLedger:
                   'equity_usdc': (account['cash_micro']+marks)/1e6 if not stale else None,
                   'unpriced_or_stale_positions': stale, 'policy': json.loads(account['policy']),
                   'recent_closed': [dict(p) for p in self.db.execute(f'''SELECT id,mint,opened_at,closed_at,
-                      cost_micro,mark_micro,pnl_micro,exit_reason FROM {self.positions_table} WHERE state='closed'
+                      cost_micro,mark_micro,pnl_micro,exit_reason,exit_evidence FROM {self.positions_table} WHERE state='closed'
                       ORDER BY closed_at DESC,id DESC LIMIT 20''')],
                   'open_positions': [{k:p[k] for k in ('id','mint','opened_at','quantity_raw','cost_micro',
-                                                       'mark_micro','mark_at','exit_reason','last_error')} for p in positions],
+                                                       'mark_micro','mark_at','exit_reason','exit_evidence','last_error')} for p in positions],
                   'limitations': ['Dinero ficticio y cotizaciones indicativas; no son operaciones ejecutadas.',
                       'Comisiones fijas y slippage son supuestos. No se modela completamente MEV ni impacto propio.',
                       'Los límites se revisan al consultar, no garantizan un precio de salida ni una pérdida máxima.']}

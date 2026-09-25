@@ -50,7 +50,7 @@ def exit_quote(now=NOW):
 
 def enriched(now=NOW):
     row = analyze()
-    row.update(scanner_version=SCANNER_VERSION, scanned_at=s.utc_string(now), baseline_v04_pass=True,
+    row.update(scanner_version=SCANNER_VERSION, scanned_at=s.utc_string(now), market_received_at=now, baseline_v04_pass=True,
                simple_baseline_pass=True, enhanced_policy=asdict(EnhancedPolicy()),
                mint_check={'status': 'ok'}, pool_check={'status': 'reported', 'locked_pct': 99},
                holders={'status': 'ok', 'top1_pct_lower_bound': 1, 'top10_pct_lower_bound': 5},
@@ -59,6 +59,38 @@ def enriched(now=NOW):
                lifecycle={'phase': 'established'}, rugged=False)
     row['policy']['min_age_hours'] = 0
     return decide(row, EnhancedPolicy())
+
+
+class PositionRiskTests(unittest.TestCase):
+    def test_entry_age_positive_ceiling_and_confirmation_are_not_hold_vetoes(self):
+        for change in ({'age_hours': 1000}, {'price_change_h1': 1000}, {'exit_quotes': []},
+                       {'trajectory': {'status': 'incomplete', 'reasons': ['hueco en historial']}},
+                       {'trajectory': {'status': 'warming_up', 'reasons': ['faltan muestras']}}):
+            with self.subTest(change=change):
+                row = enriched()
+                row.update(change)
+                decide(row, EnhancedPolicy())
+                self.assertFalse(row['quality_pass'])
+                self.assertEqual(row['position_risk'], {'schema': 1, 'status': 'hold', 'checks': []})
+
+    def test_security_missing_data_and_deterioration_still_force_exit(self):
+        for change in ({'mint_check': {'status': 'blocked', 'reasons': ['freeze activa']}},
+                       {'pool_check': {'status': 'incomplete', 'locked_pct': 99}},
+                       {'holders': {'status': 'incomplete'}},
+                       {'networks': {'status': 'unavailable'}},
+                       {'has_danger_flag': True}, {'rugged': True}, {'rugcheck_score_0_100': 99},
+                       {'liquidity_usd': 100}, {'price_change_h1': -99},
+                       {'organic': {**organic(), 'status': 'stale'}},
+                       {'organic': {**organic(), 'flagged_suspicious': True}},
+                       {'organic': {**organic(), 'windows': {'5m': {'numOrganicBuyers': 0}}}},
+                       {'trajectory': {'status': 'deteriorating', 'reasons': ['deterioro de liquidez']}},
+                       {'analysis_status': 'incomplete'}, {'price_change_h1': None}):
+            with self.subTest(change=change):
+                row = enriched()
+                row.update(change)
+                decide(row, EnhancedPolicy())
+                self.assertEqual(row['position_risk']['status'], 'exit')
+                self.assertTrue(row['position_risk']['checks'])
 
 
 class MintTests(unittest.TestCase):

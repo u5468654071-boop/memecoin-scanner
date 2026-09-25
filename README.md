@@ -1,8 +1,8 @@
-# Memecoin Scanner v0.10.0
+# Memecoin Scanner v0.11.0
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
-Estado: versión de investigación, con 225 pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
+Estado: versión de investigación con pruebas automáticas. Incluye tres carteras exclusivamente ficticias, servicios Docker para VPS y avisos opcionales por Telegram. Aún hay que reunir resultados prospectivos; no se ha demostrado rentabilidad. Consulta [VALIDATION.md](VALIDATION.md) para ver la cobertura del escáner y [TELEGRAM.md](TELEGRAM.md) para vincular los avisos.
 
 Para dejarlo funcionando en un servidor, sigue [SERVER.md](SERVER.md). Escanea y simula entradas y salidas en segundo plano, guarda posiciones tras reinicios y permite pausar o cerrar la cartera ficticia. No necesita wallet ni fondos. Los parámetros de simulación son supuestos de prueba, no una estrategia validada.
 
@@ -11,6 +11,21 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 ## Tres perfiles en el VPS
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
+
+## Salidas y evaluación v0.11
+
+Los filtros para abrir una posición se separan del riesgo de conservarla. Superar la edad o la subida horaria máximas de entrada, volver a esperar confirmación o no disponer de otra cotización de compra ya no obliga por sí solo a vender. Los datos críticos ausentes o caducados, el deterioro real y los límites de salida siguen provocando una salida pendiente; si no hay ruta de venta, el capital permanece comprometido. Cada cierre nuevo guarda la observación y los motivos concretos. La entrada también comprueba el valor neto de liquidar la cantidad exacta después de los costes supuestos.
+
+El estudio prospectivo registra la confirmación de cada perfil por separado y muestra concentración de resultados y sensibilidad a salidas desconocidas. El informe por fechas distingue operaciones de monedas únicas y separa versiones del algoritmo:
+
+```bash
+# Últimos siete días, solo lectura local y sin llamadas a proveedores
+docker compose exec paper python server.py performance
+# Intervalo [inicio, fin), fechas con zona horaria explícita
+docker compose exec paper python server.py performance --since 2026-09-21T00:00:00Z --until 2026-09-26T00:00:00Z
+```
+
+Los cambios corrigen problemas de funcionamiento y medición; su efecto en rentabilidad requiere datos posteriores. Se conservan saldos e histórico, asignación 600/300/100 y límites del plan. Véase [validación v0.11](docs/VALIDATION_V0110.md).
 
 ## Fomo en v0.10
 
