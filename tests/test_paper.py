@@ -3,11 +3,15 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from observation_store import ObservationStore
+from engine import decide, EnhancedPolicy
 from paper_trading import PaperLedger, PaperPolicy, micro_usdc
 from providers import USDC
 from server import main
@@ -201,9 +205,154 @@ class PaperTests(unittest.TestCase):
     def test_new_invalidation_exits_and_manual_pause_does_not_disable_exits(self):
         self.open()
         self.now += 1
-        self.signal(quality_pass=False, state='insufficient_data')
+        row = enriched(self.now)
+        row['mint_check'] = {'status': 'incomplete'}
+        decide(row, EnhancedPolicy())
+        self.store.record_enriched(row, 'missing-risk')
         self.ledger.tick(self.jupiter, self.clock, paused=True)
         self.assertEqual(self.ledger.report(self.now)['recent_closed'][0]['exit_reason'], 'candidato invalidado')
+
+    def test_entry_only_filters_do_not_close_but_stop_loss_still_does(self):
+        self.assertTrue(self.open())
+        self.now += 60
+        row = enriched(self.now)
+        row.update(age_hours=row['policy']['max_age_hours'] + 1,
+                   price_change_h1=row['policy']['max_price_change_h1'] + 1,
+                   trajectory={'status': 'warming_up', 'reasons': ['faltan observaciones']},
+                   exit_quotes=[])
+        decide(row, EnhancedPolicy())
+        self.assertFalse(row['quality_pass'])
+        self.assertEqual(row['position_risk']['status'], 'hold')
+        self.store.record_enriched(row, 'entry-only')
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        self.assertEqual(len(self.ledger.open_positions()), 1)
+        self.jupiter.returned = 10000000
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        self.assertEqual(self.ledger.report(self.now)['recent_closed'][0]['exit_reason'], 'stop-loss observado')
+
+    def test_stale_risk_exits_even_with_fresh_sell_quote(self):
+        self.assertTrue(self.open())
+        self.now += 301
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        closed = self.ledger.report(self.now)['recent_closed'][0]
+        self.assertEqual(closed['exit_reason'], 'candidato invalidado')
+        evidence = json.loads(closed['exit_evidence'])
+        self.assertEqual(evidence['checks'][0]['code'], 'risk_observation_stale')
+        self.assertEqual(evidence['observed_at'], NOW)
+
+    def test_risk_is_rechecked_after_a_slow_sell_quote(self):
+        self.assertTrue(self.open())
+        self.now += 299
+        original = self.jupiter.quote
+        def delayed(*args):
+            self.now += 2
+            return original(*args)
+        self.jupiter.quote = delayed
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        evidence = json.loads(self.ledger.report(self.now)['recent_closed'][0]['exit_evidence'])
+        self.assertEqual(evidence['checks'][0]['code'], 'risk_observation_stale')
+
+    def test_fresh_observation_cannot_hide_stale_provider_data(self):
+        for field in ('organic', 'market_received_at'):
+            with self.subTest(field=field):
+                row = enriched(self.now)
+                row['exit_quotes'][0]['amount_usdc'] = 25
+                if field == 'organic':
+                    row['organic']['updated_at'] = self.now - 301
+                else:
+                    row[field] = self.now - 301
+                signal = self.store.record_enriched(row, field)
+                self.assertFalse(self.open(signal))
+                self.assertEqual(self.ledger.report(self.now)['cash_usdc'], 1000)
+        self.assertTrue(self.open())
+        self.now += 1
+        organic = dict(enriched(self.now)['organic'], updated_at=self.now-301)
+        self.signal(organic=organic)
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        evidence = json.loads(self.ledger.report(self.now)['recent_closed'][0]['exit_evidence'])
+        self.assertEqual(evidence['checks'][0]['code'], 'risk_organic_stale')
+
+    def test_old_or_malformed_risk_cannot_open_or_keep_a_position(self):
+        for risk in (None, {}, {'schema': True, 'status': 'hold', 'checks': []},
+                     {'schema': 1, 'status': 'hold', 'checks': [{'code': 'mint'}]},
+                     {'schema': 1, 'status': 'exit', 'checks': []}):
+            with self.subTest(risk=risk):
+                self.assertFalse(self.open(self.signal(position_risk=risk)))
+        self.assertTrue(self.open())
+        self.now += 1
+        self.signal(position_risk=None)
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        evidence = json.loads(self.ledger.report(self.now)['recent_closed'][0]['exit_evidence'])
+        self.assertEqual(evidence['checks'][0]['code'], 'risk_decision_missing')
+
+    def test_risk_exit_evidence_survives_route_failure_restart_and_recovery(self):
+        self.assertTrue(self.open())
+        self.now += 1
+        row = enriched(self.now)
+        row['mint_check'] = {'status': 'blocked', 'reasons': ['freeze activa']}
+        decide(row, EnhancedPolicy())
+        oid = self.store.record_enriched(row, 'risk')
+        self.jupiter.fail = True
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        self.assertEqual(self.ledger.report(self.now)['cash_usdc'], 974.95)
+        evidence = json.loads(self.ledger.open_positions()[0]['exit_evidence'])
+        self.assertEqual(evidence['observation_id'], oid)
+        self.assertIn('mint', [c['code'] for c in evidence['checks']])
+        self.ledger = PaperLedger(self.store, self.policy)
+        self.now += 1
+        self.signal()  # A recovered observation must not erase a latched exit.
+        self.jupiter.fail = False
+        self.ledger.refresh_positions(self.jupiter, self.clock)
+        closed = self.ledger.report(self.now)['recent_closed'][0]
+        self.assertEqual(json.loads(closed['exit_evidence'])['observation_id'], oid)
+
+    def test_exact_initial_mark_rejects_deterioration_after_entry_quote(self):
+        original = self.jupiter.quote
+        def worsened(src, dst, amount):
+            quote = original(src, dst, amount)
+            if str(amount) == '995000':
+                quote['out_amount'] = '20000000'
+            return quote
+        self.jupiter.quote = worsened
+        self.assertFalse(self.open())
+        self.assertEqual(self.ledger.report(self.now)['cash_usdc'], 1000)
+        self.assertFalse(self.ledger.open_positions())
+
+    def test_exact_initial_mark_counts_both_fixed_costs_and_slippage(self):
+        signal = self.signal(enhanced_policy={**enriched(self.now)['enhanced_policy'], 'max_round_trip_loss_pct': 0.8})
+        # Fake trip reports zero cost; the actual initial mark loses ~0.898%.
+        self.assertFalse(self.open(signal))
+        self.assertEqual(self.ledger.report(self.now)['cash_usdc'], 1000)
+
+    def test_additive_exit_evidence_migration_preserves_legacy_positions(self):
+        self.assertTrue(self.open())
+        original = self.ledger.report(self.now)
+        with self.store.db:
+            self.store.db.execute('ALTER TABLE paper_positions DROP COLUMN exit_evidence')
+        migrated = PaperLedger(self.store, self.policy)
+        self.assertEqual(migrated.report(self.now)['cash_usdc'], original['cash_usdc'])
+        self.assertEqual(len(migrated.open_positions()), 1)
+        self.assertIsNone(migrated.open_positions()[0]['exit_evidence'])
+
+    def test_concurrent_exit_evidence_migrations_keep_one_column_and_same_balance(self):
+        self.assertTrue(self.open())
+        with self.store.db:
+            self.store.db.execute('ALTER TABLE paper_positions DROP COLUMN exit_evidence')
+        barrier = Barrier(3)
+        def migrate(_):
+            db = sqlite3.connect(self.path, timeout=10)
+            db.row_factory = sqlite3.Row
+            try:
+                barrier.wait(timeout=10)
+                ledger = PaperLedger(SimpleNamespace(db=db), self.policy)
+                return ledger.report(self.now)['cash_usdc'], len(ledger.open_positions())
+            finally:
+                db.close()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(migrate, range(3)))
+        self.assertEqual(results, [(974.95, 1)] * 3)
+        columns = [r['name'] for r in self.store.db.execute('PRAGMA table_info(paper_positions)')]
+        self.assertEqual(columns.count('exit_evidence'), 1)
 
     def test_close_all_does_not_reopen_another_candidate(self):
         self.open()

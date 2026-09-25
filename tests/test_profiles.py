@@ -54,6 +54,14 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(row['organic']['organic_score'], 60)
         self.assertEqual(sum(p['paper']['initial_usdc'] for p in self.plan.profiles), 1000)
 
+    def test_position_risk_is_separate_for_each_profile_and_confirmation_is_entry_only(self):
+        warming = source_row(self.plan)
+        self.assertFalse(any(p['quality_pass'] for p in warming['profiles'].values()))
+        self.assertTrue(all(p['position_risk']['status'] == 'hold' for p in warming['profiles'].values()))
+        row = confirmed(self.plan, liquidity_usd=30000)
+        self.assertEqual([p['position_risk']['status'] for p in row['profiles'].values()], ['exit', 'exit', 'hold'])
+        self.assertIn('liquidity', [c['code'] for c in row['profiles']['conservative']['position_risk']['checks']])
+
     def test_earlier_entry_only_aggressive_then_balanced(self):
         history = []
         for at in (NOW-180, NOW-120, NOW):
