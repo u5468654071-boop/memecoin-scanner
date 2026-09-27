@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 
 from memecoin_scanner import number, valid_address
 from providers import USDC, integer
+from paper_events import create_events, record_event_safely
 from version import SCANNER_VERSION
 
 
@@ -103,6 +104,8 @@ class PaperLedger:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS {self.index_name} ON {self.positions_table}(mint) WHERE state='open';
         ''')
+        if profile_id is not None:
+            create_events(self.db)
         # Additive migration: retain balances, open positions and historical
         # decisions. Pre-migration exits have unknown attribution (NULL).
         with self.db:
@@ -286,11 +289,15 @@ class PaperLedger:
                     or self.db.execute(f'SELECT 1 FROM {self.positions_table} WHERE observation_id=? OR (mint=? AND state=?)',
                                        (signal_id, signal['token'], 'open')).fetchone()):
                 return False
-            self.db.execute(f'''INSERT INTO {self.positions_table}
+            inserted = self.db.execute(f'''INSERT INTO {self.positions_table}
                 (observation_id,mint,opened_at,quantity_raw,cost_micro,state,entry_quote,mark_micro,mark_at,peak_micro)
                 VALUES (?,?,?,?,?,'open',?,?,?,?)''',
                 (signal_id, signal['token'], now, str(quantity), cost, json.dumps(trip), value, now, value))
             self.db.execute(f'UPDATE {self.account_table} SET cash_micro=cash_micro-? WHERE id=1', (cost,))
+            if self.profile_id is not None:
+                record_event_safely(self.db, 'open', self.profile_id, inserted.lastrowid, signal['token'], now,
+                    {'scanner_version': row['scanner_version'], 'profile_plan_hash': self.plan_hash,
+                     'observation_id': signal_id, 'cost_micro': cost, 'quantity_raw': str(quantity)})
         return True
 
     def refresh_positions(self, jupiter, clock=time.time, close_all=False):
@@ -354,6 +361,15 @@ class PaperLedger:
                     self.db.execute(f'''UPDATE {self.positions_table} SET state='closed',closed_at=?,exit_quote=?,pnl_micro=?
                         WHERE id=?''', (now, json.dumps(quote), value-pos['cost_micro'], pos['id']))
                     self.db.execute(f'UPDATE {self.account_table} SET cash_micro=cash_micro+? WHERE id=1', (value,))
+                    if self.profile_id is not None:
+                        entry = self.db.execute('SELECT * FROM observations WHERE id=?', (pos['observation_id'],)).fetchone()
+                        entry_payload = self._payload(entry) if entry else {}
+                        record_event_safely(self.db, 'close', self.profile_id, pos['id'], pos['mint'], now,
+                            {'scanner_version': entry_payload.get('scanner_version'),
+                             'profile_plan_hash': self.plan_hash, 'observation_id': pos['observation_id'],
+                             'quantity_raw': pos['quantity_raw'], 'cost_micro': pos['cost_micro'],
+                             'proceeds_micro': value, 'pnl_micro': value-pos['cost_micro'],
+                             'exit_reason': reason})
 
     def tick(self, jupiter, clock=time.time, paused=False, close_all=False):
         self.refresh_positions(jupiter, clock, close_all)

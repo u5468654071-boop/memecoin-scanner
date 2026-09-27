@@ -1,4 +1,4 @@
-# Memecoin Scanner v0.11.0
+# Memecoin Scanner v0.11.1
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
@@ -11,6 +11,16 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 ## Tres perfiles en el VPS
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
+
+## Experimento de reentradas v0.11.1
+
+Compose activa una [comparación prospectiva emparejada](SHADOW.md): el tratamiento omite compras durante 24 horas tras dos cierres perdedores de la misma moneda en las últimas 24 horas, compartidos entre perfiles. Usa las oportunidades y cotizaciones del control, sin llamadas adicionales a proveedores; registra pérdidas evitadas y ganancias descartadas. Espera un inicio sin posiciones abiertas y conserva saldos, cursor y cuarentenas tras reinicios. No modifica las reglas del simulador principal ni prueba compras alternativas con el capital liberado.
+
+```bash
+docker compose exec paper python server.py shadow-report
+```
+
+La versión de aplicación es 0.11.1; la versión de decisiones sigue siendo 0.11.0 porque sus filtros y salidas no cambian. No se invalidan posiciones existentes por este cambio de empaquetado. La [investigación de bots y plataformas](BOT_RESEARCH.md) compara herramientas oficiales, código abierto y evidencia disponible; ninguna se presenta como garantía de rentabilidad.
 
 ## Salidas y evaluación v0.11
 

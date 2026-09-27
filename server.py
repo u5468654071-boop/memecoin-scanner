@@ -30,9 +30,36 @@ def env_int(name, default, lower, upper):
         raise ValueError(name + ' fuera del intervalo permitido') from None
 
 
+def update_shadow(store, root, now):
+    """Optional observer: a study failure must not stop paper exits or entries."""
+    try:
+        from shadow_quarantine import ShadowQuarantine
+        # A failed observer must not leave a transaction on the control's
+        # connection. Its own connection is closed even on unexpected errors.
+        with closing(sqlite3.connect(root / 'scanner.sqlite3', timeout=1)) as shadow_db:
+            shadow_db.row_factory = sqlite3.Row
+            study = ShadowQuarantine(SimpleNamespace(db=shadow_db))
+            study.activate_if_flat(now)
+            study.sync(now)
+            result = study.report(now)
+        write_json(root / 'shadow-report.json', result)
+        study_ok = (result.get('status') not in ('error', 'incompatible')
+                    and not result.get('last_error') and not result.get('incompatibility'))
+        write_json(root / 'shadow-status.json', {'updated_at': now, 'ok': study_ok,
+                   'study_status': result.get('status'), 'comparison_current': result.get('comparison_current', False)})
+    except Exception as exc:
+        # Never log arbitrary payloads/credentials from an exception message.
+        status = {'updated_at': now, 'ok': False, 'error_type': type(exc).__name__}
+        print(json.dumps({'shadow_quarantine': status}), flush=True)
+        try:
+            write_json(root / 'shadow-status.json', status)
+        except OSError:
+            pass
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Servidor de escaneo y cartera ficticia; no opera dinero real')
-    parser.add_argument('command', choices=('scan', 'paper', 'report', 'performance', 'coverage', 'health', 'pause', 'resume', 'close-all', 'backup'))
+    parser.add_argument('command', choices=('scan', 'paper', 'report', 'performance', 'shadow-report', 'coverage', 'health', 'pause', 'resume', 'close-all', 'backup'))
     parser.add_argument('--data-dir', type=Path, default=Path(os.environ.get('DATA_DIR', 'data')))
     parser.add_argument('--policy', type=Path, default=Path('paper-policy.json'))
     parser.add_argument('--profiles', type=Path, default=os.environ.get('PAPER_PROFILES_FILE'))
@@ -42,14 +69,30 @@ def main(argv=None):
     parser.add_argument('--backup-to', type=Path)
     parser.add_argument('--since', help='Inicio inclusivo ISO 8601 con zona horaria; solo performance')
     parser.add_argument('--until', help='Fin exclusivo ISO 8601 con zona horaria; solo performance')
+    parser.add_argument('--shadow-quarantine', action='store_true', help='Comparación prospectiva emparejada; solo paper con perfiles')
     args = parser.parse_args(argv)
     if args.cycles < 0:
         parser.error('cycles debe ser >=0')
     if args.command != 'performance' and (args.since is not None or args.until is not None):
         parser.error('--since y --until solo se usan con performance')
+    if args.shadow_quarantine and (args.command != 'paper' or args.profiles is None):
+        parser.error('--shadow-quarantine necesita paper y --profiles')
     root = args.data_dir
     db_path = root / 'scanner.sqlite3'
     pause_path, close_path = root / 'PAUSE', root / 'CLOSE_ALL'
+    if args.command == 'shadow-report':
+        from shadow_quarantine import shadow_report
+        if not db_path.is_file():
+            parser.error('shadow-report necesita una base existente; no inicia el experimento')
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as db:
+            db.row_factory = sqlite3.Row
+            result = shadow_report(SimpleNamespace(db=db), time.time())
+        try:
+            result['service_status'] = json.loads((root / 'shadow-status.json').read_text())
+        except (OSError, ValueError):
+            result['service_status'] = None
+        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        return 0
     if args.command == 'performance':
         from performance import performance_report
         from providers import timestamp
@@ -161,8 +204,12 @@ def main(argv=None):
             cycle = 0
             while True:
                 start = time.monotonic()
+                if args.shadow_quarantine:
+                    update_shadow(store, root, time.time())
                 heartbeat(root / 'paper.heartbeat.json', 'valuing')
                 report = ledger.tick(jupiter, paused=pause_path.exists, close_all=close_path.exists)
+                if args.shadow_quarantine:
+                    update_shadow(store, root, time.time())
                 report['scanner_recent_progress'] = healthy(root / 'scanner.heartbeat.json')
                 write_json(root / 'paper-report.json', report)
                 heartbeat(root / 'paper.heartbeat.json', 'waiting')

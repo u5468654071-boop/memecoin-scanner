@@ -1,7 +1,7 @@
 name: memecoin-paper
 x-common: &common
   build: .
-  image: memecoin-scanner:0.11.0
+  image: memecoin-scanner:0.11.1
   env_file: .env.server
   volumes:
     - state:/data
@@ -37,7 +37,7 @@ services:
       start_period: 120s
   paper:
     <<: *common
-    command: [paper, --profiles, /app/profiles.json]
+    command: [paper, --profiles, /app/profiles.json, --shadow-quarantine]
     healthcheck:
       test: [CMD, python, server.py, health, --service, paper]
       interval: 60s
