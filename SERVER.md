@@ -1,4 +1,4 @@
-# VPS: escaneo y simulación automática v0.11.0
+# VPS: escaneo y simulación automática v0.11.1
 
 Dos servicios: `scanner` analiza tokens; `paper` mantiene tres carteras de dinero ficticio con cotizaciones de Jupiter. Comparten SQLite y límites de solicitudes. **No firman ni envían transacciones y no necesitan wallet, SOL ni USDC reales.** No existe un interruptor para activar operaciones reales.
 
@@ -17,7 +17,7 @@ chmod 600 .env.server
 nano .env.server
 ```
 
-También puedes extraer el paquete v0.11.0 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
+También puedes extraer el paquete v0.11.1 en una carpeta nueva y continuar desde `cp .env.example .env.server`. Para actualizar una instalación existente, conserva primero una copia de su base de datos; no mezcles carpetas ni volúmenes de experimentos distintos.
 
 Dentro de `.env.server`, configura `JUPITER_API_KEY` y, si tienes uno, `SOLANA_RPC_URL`. La clave se introduce en el servidor, nunca en GitHub ni en el chat. Compose carga este archivo; ejecutar Python directamente requiere exportar las variables. No hace falta instalar el CLI de Jupiter.
 
@@ -57,6 +57,10 @@ Usa `config --quiet`: la salida completa de `docker compose config` podría most
 El informe muestra saldo ficticio, posiciones, cierres, resultado y bloqueos de entrada por perfil, además del agregado. Incluye rentabilidad ficticia, aciertos, factor de beneficio y drawdown de las valoraciones observadas, con sus limitaciones. Si alguna posición carece de una valoración reciente, `equity_usdc` es `null`: no se inventa su valor ni se asume que vale cero. Que no haya compras puede ser correcto: exige superar todas las comprobaciones, incluida la confirmación temporal.
 
 ## Búsqueda y medición prospectiva
+
+Compose 0.11.1 habilita `--shadow-quarantine` en `paper`: comparación de oportunidades aceptadas con y sin una cuarentena compartida por mint después de dos cierres perdedores en 24 horas. La regla queda congelada al iniciar; primero espera las tres carteras sin posiciones. Conserva todos los saldos originales y no necesita nuevas API keys ni llamadas de mercado. Consulta `docker compose exec paper python server.py shadow-report` y [SHADOW.md](SHADOW.md).
+
+`shadow-status.json` distingue progreso normal, espera de inicio y errores/incompatibilidad. Un fallo del observador se registra sin interrumpir el motor; un hueco en el diario invalida el experimento de forma persistente. No confundir `paper` saludable con estudio válido. La versión de decisiones sigue en 0.11.0: este paquete añade observación, no cambia las reglas de entrada/salida ni fuerza cierres por una nueva versión.
 
 `performance` consulta SQLite en modo de solo lectura y no llama a APIs ni inicializa carteras. Por defecto usa los últimos siete días; `--since` y `--until` aceptan ISO 8601 con zona horaria, con inicio inclusivo y fin exclusivo. Agrupa cierres por perfil, versión de la observación de entrada y huella del plan. Su resultado realizado no equivale a la variación del patrimonio durante el intervalo: las posiciones aún abiertas no tienen una valoración histórica inventada.
 
