@@ -43,3 +43,18 @@ No se ha instalado ni ejecutado código externo, contratado servicios ni conecta
 5. No depender de scraping de terminales. Los informes completos de esta investigación no sustituyen una auditoría de seguridad ni una reproducción de los artículos.
 
 La ingeniería de estas herramientas ofrece ideas verificables. La ventaja económica de nuestro selector sigue pendiente de evaluación prospectiva.
+
+
+## Ampliación del 28/09/2026
+
+- [Hour-Aware Adaptive Risk Management, versión 3](https://arxiv.org/abs/2606.08232v3): 190 operaciones ficticias, resultado positivo frágil al quitar los tres mejores cierres. La comparación exploratoria de horas no es significativa (p=0,5634 en v3); no copiamos vetos horarios. Su contribución útil es medir rechazados y fragilidad, no certificar un bot ganador.
+- [solana-signal-trader](https://github.com/hypnogaba/solana-signal-trader): referencia de ingestión Telegram, checks y revisión por canales. No publica los canales de origen usados por el operador ni un historial auditado reproducido por nosotros. Su retuning no se traslada automáticamente a nuestro escáner.
+- [solana-pumpfun-bot](https://github.com/DeeKalshiWay/solana-pumpfun-bot): declara resultados de paper trading con fricciones, pero también concentración de aproximadamente el 60% del PnL en un ticker. No hemos reproducido ese historial ni verificado ganancias reales. No se instala ni ejecuta su código.
+- [MELT, versión 2](https://arxiv.org/abs/2602.13480v2): conjunto de trazas y features para detectar riesgo de lanzamientos y cuentas coordinadas. Una mejora de clasificación o reducción de pérdida no demuestra beneficio ejecutable. Nuestro muestreo de propietarios y grupos del proveedor sigue siendo incompleto; no fingimos disponer de su grafo/dataset en tiempo real.
+- [Catching the Rug](https://arxiv.org/abs/2608.20271): analiza detección temprana y transferencia entre plataformas. Antes de incorporar ML harían falta features disponibles en tiempo de decisión, separación cronológica y coste/cobertura medidos en nuestro universo. No se han reproducido sus modelos.
+- [Organic Score, explicación oficial de Jupiter](https://developers.jup.ag/blog/what-is-organic-score): distingue traders, compradores netos orgánicos y volumen. El score es relativo al ecosistema y puede ser volátil en tokens recientes. No tratamos un ratio de volumen orgánico inventado como filtro oficial ni lo confundimos con rentabilidad.
+- [SwapHunt, estudio publicado por sus autores](https://swaphunt.dev/articles/solana-memecoin-null-result): informa resultados negativos al probar reglas sobre tokens descubiertos después de 250k de capitalización. Es evidencia autodeclarada con universo y supuestos de fricción propios, no una prueba de que toda estrategia falle. No hemos reproducido su base ni sus backtests.
+
+### Aplicación concreta
+
+Se añade diagnóstico de concentración por cierres, monedas y días, estrés de costes adicionales y asociación del PnL con evidencias de salida en [ROBUSTNESS.md](ROBUSTNESS.md). No se cambian filtros por selección retrospectiva de la configuración que gana en esta muestra. El experimento existente conserva su regla prefijada y sus resultados negativos; no se promociona a regla principal porque evite algunas pérdidas si descarta todavía más ganancias.
