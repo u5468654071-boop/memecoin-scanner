@@ -52,6 +52,52 @@ def _accounting(rows, since, until):
             'realized_pnl_micro': net, 'realized_pnl_usdc': net / 1000000}, closed
 
 
+def _robustness(closed):
+    """Retrospective sensitivities, never used as entry/exit rules or significance tests."""
+    net = sum(p['pnl_micro'] for p in closed)
+    winners = sorted((p for p in closed if p['pnl_micro'] > 0),
+                     key=lambda p: (-p['pnl_micro'], p['closed_at'], p['id']))
+    days = defaultdict(list)
+    mints = defaultdict(list)
+    for position in closed:
+        days[_utc(position['closed_at'])[:10]].append(position['pnl_micro'])
+        mints[position['mint']].append(position['pnl_micro'])
+    positive_mints = sorted((sum(values), mint) for mint, values in mints.items()
+                            if sum(values) > 0)
+    positive_days = sorted((sum(values), day) for day, values in days.items()
+                           if sum(values) > 0)
+    gross_profit = sum(p['pnl_micro'] for p in winners)
+    top = winners[:3]
+    removed = sum(p['pnl_micro'] for p in top)
+    return {
+        'mean_pnl_usdc': net / (len(closed) * 1000000) if closed else None,
+        'median_pnl_usdc': statistics.median(p['pnl_micro'] for p in closed) / 1000000 if closed else None,
+        'top_positive_trades': [{'position_id': p['id'], 'mint': p['mint'],
+            'closed_at_utc': _utc(p['closed_at']), 'pnl_usdc': p['pnl_micro']/1000000} for p in top],
+        'removed_positive_trade_count': len(top),
+        'top_three_share_of_gross_profit_pct': 100*removed/gross_profit if gross_profit else None,
+        'net_without_top_three_positive_trades_usdc': (net-removed)/1000000 if closed else None,
+        'removed_positive_mint_count': min(3, len(positive_mints)),
+        'net_without_top_three_positive_mints_usdc':
+            (net-sum(pnl for pnl, _ in positive_mints[-3:]))/1000000 if closed else None,
+        'net_without_best_positive_closing_day_usdc':
+            (net-positive_days[-1][0])/1000000 if positive_days else None,
+        'by_closing_day_utc': [{'day': day, 'closed_count': len(values),
+            'realized_pnl_usdc': sum(values)/1000000} for day, values in sorted(days.items())],
+        # Extra costs are additive to the net PnL already recorded; do not
+        # subtract existing quoted slippage or the stored fixed-cost assumption again.
+        'additional_cost_scenarios': [{'additional_usdc_per_side': extra/1000000,
+            'realized_pnl_usdc': (net-2*len(closed)*extra)/1000000}
+            for extra in (0, 10000, 50000, 100000)],
+        'additional_break_even_cost_usdc_per_side':
+            net/(2*len(closed)*1000000) if closed and net > 0 else None,
+        'additional_break_even_unavailable_reason':
+            'no_closed_trades' if not closed else 'nonpositive_net_pnl' if net <= 0 else None,
+        'interpretation': 'Sensibilidades retrospectivas de cierres, no carteras alternativas ni pruebas '
+            'estadísticas. Quitar ganadores utiliza información futura. Los costes son escenarios '
+            'adicionales fijos, no estimaciones de ejecución. No incluye posiciones abiertas.'}
+
+
 def _metrics(rows, since, until, fixed_micro):
     result, closed = _accounting(rows, since, until)
     wins = sum(p['pnl_micro'] > 0 for p in closed)
@@ -61,9 +107,12 @@ def _metrics(rows, since, until, fixed_micro):
     mints = defaultdict(list)
     reasons, evidence_kinds, risk_checks, price_triggers = Counter(), Counter(), Counter(), Counter()
     missing_evidence = invalid_evidence = 0
+    reason_pnl, risk_pnl = defaultdict(int), defaultdict(int)
     for position in closed:
         mints[position['mint']].append(position)
-        reasons[position['exit_reason'] or '(sin motivo registrado)'] += 1
+        reason = position['exit_reason'] or '(sin motivo registrado)'
+        reasons[reason] += 1
+        reason_pnl[reason] += position['pnl_micro']
         raw = position['exit_evidence']
         evidence = _object(raw)
         if raw is None:
@@ -75,9 +124,12 @@ def _metrics(rows, since, until, fixed_micro):
             checks = evidence.get('checks', [])
             if isinstance(checks, list):
                 # Una posición cuenta como máximo una vez por código y estado.
-                risk_checks.update(set((check['code'], check['status']) for check in checks
+                unique_checks = set((check['code'], check['status']) for check in checks
                     if isinstance(check, dict) and _text(check.get('code'))
-                    and check.get('status') in ('blocked', 'missing', 'waiting')))
+                    and check.get('status') in ('blocked', 'missing', 'waiting'))
+                risk_checks.update(unique_checks)
+                for key in unique_checks:
+                    risk_pnl[key] += position['pnl_micro']
             for trigger in ('stop_loss_triggered', 'take_profit_triggered'):
                 if evidence.get(trigger) is True:
                     price_triggers[trigger] += 1
@@ -109,12 +161,22 @@ def _metrics(rows, since, until, fixed_micro):
         assumed_fixed_cost_per_side_usdc=fixed_micro/1000000 if fixed_micro is not None else None,
         fixed_cost_policy_available=fixed_micro is not None,
         exit_reason_counts=dict(sorted(reasons.items())),
+        exit_reason_pnl=[{'reason': reason, 'closed_count': count,
+                          'realized_pnl_usdc': reason_pnl[reason]/1000000}
+                         for reason, count in sorted(reasons.items())],
+        risk_check_pnl={'overlapping_groups': True,
+            'interpretation': 'Una salida puede tener varios checks: sus PnL se solapan y no deben sumarse. '
+                'Asociación al cierre, no atribución causal ni filtro de entrada.',
+            'groups': [{'code': code, 'status': status, 'closed_count': count,
+                        'realized_pnl_usdc': risk_pnl[(code,status)]/1000000}
+                       for (code,status), count in sorted(risk_checks.items())]},
         exit_evidence={'recorded_closed_count': len(closed)-missing_evidence-invalid_evidence,
                        'missing_closed_count': missing_evidence, 'invalid_closed_count': invalid_evidence,
                        'kind_counts': dict(sorted(evidence_kinds.items())),
                        'check_counts': [{'code': code, 'status': status, 'closed_count': count}
                                         for (code, status), count in sorted(risk_checks.items())],
                        'price_trigger_counts': dict(sorted(price_triggers.items()))},
+        robustness=_robustness(closed),
         per_mint=per_mint, best_mint=best, worst_mint=worst,
         net_without_best_mint_usdc=(result['realized_pnl_micro']-best['realized_pnl_micro'])/1000000
             if best else None)
