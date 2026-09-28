@@ -113,6 +113,12 @@ class PerformanceTests(unittest.TestCase):
         self.position(prefix, 2, 101, 1)
         cohort = performance_report(self.store, 100, 200)['profiles']['legacy']['cohorts'][0]
         self.assertEqual(cohort['exit_reason_counts'], {'objetivo observado': 1, 'riesgo de posición': 1})
+        self.assertEqual(cohort['exit_reason_pnl'], [
+            {'reason': 'objetivo observado', 'closed_count': 1, 'realized_pnl_usdc': 0.000001},
+            {'reason': 'riesgo de posición', 'closed_count': 1, 'realized_pnl_usdc': -0.000001}])
+        self.assertTrue(cohort['risk_check_pnl']['overlapping_groups'])
+        self.assertEqual(cohort['risk_check_pnl']['groups'], [
+            {'code': 'liquidity', 'status': 'blocked', 'closed_count': 1, 'realized_pnl_usdc': -0.000001}])
         self.assertEqual(cohort['exit_evidence'], {'recorded_closed_count': 1, 'missing_closed_count': 1,
             'invalid_closed_count': 0, 'kind_counts': {'position_risk': 1},
             'check_counts': [{'code': 'liquidity', 'status': 'blocked', 'closed_count': 1}],
@@ -200,6 +206,50 @@ class PerformanceTests(unittest.TestCase):
             finally:
                 writer.close()
                 reader.close()
+
+    def test_robustness_removes_only_positive_trades_and_groups_correlated_mints(self):
+        prefix = self.ledger()
+        for opened, closed, pnl, mint in ((1,100,6000000,'A'), (2,101,4000000,'A'),
+                (3,102,3000000,'B'), (4,103,-8000000,'C'), (5,104,-1000000,'B'),
+                (6,105,0,'D'), (7,200,99000000,'future')):
+            self.position(prefix, opened, closed, pnl, mint=mint)
+        r = performance_report(self.store, 100, 200)['profiles']['legacy']['cohorts'][0]['robustness']
+        self.assertEqual(r['mean_pnl_usdc'], 4/6)
+        self.assertEqual(r['median_pnl_usdc'], 1.5)
+        self.assertEqual(r['net_without_top_three_positive_trades_usdc'], -9)
+        self.assertEqual(r['top_three_share_of_gross_profit_pct'], 100)
+        self.assertEqual(r['removed_positive_mint_count'], 2)
+        self.assertEqual(r['net_without_top_three_positive_mints_usdc'], -8)
+        self.assertEqual(r['net_without_best_positive_closing_day_usdc'], 0)
+        self.assertEqual(r['additional_cost_scenarios'][-1]['realized_pnl_usdc'], 2.8)
+        self.assertEqual(r['additional_break_even_cost_usdc_per_side'], 4/12)
+        self.assertEqual([p['position_id'] for p in r['top_positive_trades']], [1,2,3])
+
+    def test_exit_check_groups_overlap_without_duplicate_pnl(self):
+        prefix = self.ledger(evidence=True)
+        first = {'code': 'organic_activity', 'status': 'blocked'}
+        second = {'code': 'trajectory', 'status': 'blocked'}
+        self.position(prefix, 1, 100, -2000000, evidence={'checks': [first, first, second]})
+        c = performance_report(self.store, 100, 200)['profiles']['legacy']['cohorts'][0]
+        self.assertEqual([g['realized_pnl_usdc'] for g in c['risk_check_pnl']['groups']], [-2,-2])
+        self.assertEqual([g['closed_count'] for g in c['risk_check_pnl']['groups']], [1,1])
+        self.assertEqual(sum(g['realized_pnl_usdc'] for g in c['exit_reason_pnl']), -2)
+
+    def test_robustness_small_loss_only_and_empty_samples_do_not_invent_winners(self):
+        from performance import _robustness
+        empty = _robustness([])
+        self.assertIsNone(empty['mean_pnl_usdc'])
+        self.assertIsNone(empty['net_without_top_three_positive_trades_usdc'])
+        self.assertEqual(empty['additional_break_even_unavailable_reason'], 'no_closed_trades')
+        prefix = self.ledger()
+        self.position(prefix, 1, 100, -2000000)
+        r = performance_report(self.store, 100, 200)['profiles']['legacy']['cohorts'][0]['robustness']
+        self.assertEqual(r['removed_positive_trade_count'], 0)
+        self.assertEqual(r['net_without_top_three_positive_trades_usdc'], -2)
+        self.assertIsNone(r['net_without_best_positive_closing_day_usdc'])
+        self.assertIsNone(r['top_three_share_of_gross_profit_pct'])
+        self.assertIsNone(r['additional_break_even_cost_usdc_per_side'])
+        self.assertEqual(r['additional_break_even_unavailable_reason'], 'nonpositive_net_pnl')
 
     def test_invalid_bounds_and_corrupt_closed_pnl_fail_explicitly(self):
         for since, until in ((1, 1), (2, 1), (True, 2), (0, float('nan')), (0, float('inf')),
