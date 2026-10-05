@@ -1,4 +1,4 @@
-# Memecoin Scanner v0.11.2
+# Memecoin Scanner v0.11.3
 
 Escáner de investigación para Solana: detecta lanzamientos, conserva su evolución, comprueba permisos y concentración, consulta actividad orgánica y cotizaciones de salida, y genera alertas locales explicables. **No conecta wallets, firma transacciones ni envía órdenes.** Python 3.9 o posterior.
 
@@ -12,9 +12,9 @@ La revisión 0.5.1 introdujo un tramo continuo de observaciones válidas, detect
 
 [Conservador, equilibrado y agresivo](PROFILES.md): 600, 300 y 100 USDC virtuales; entradas de 50, 25 y 10, filtros y salidas distintos, exposición conjunta limitada y resultados separados. Comparten observaciones y cuotas. Compose activa este plan por defecto; el CLI de escaneo aislado conserva su política base si no se indica `--profiles profiles.json`. El cambio de versión reinicia la confirmación de candidatos y conserva el historial.
 
-## Diagnóstico de robustez v0.11.2
+## Diagnóstico de robustez v0.11.3
 
-El informe `server.py performance` añade [sensibilidades de resultados](ROBUSTNESS.md): PnL sin los tres mejores cierres positivos, sin las tres monedas con mayor PnL neto positivo y sin el mejor día positivo de cierres UTC. Incluye media/mediana, concentración de ganancias, escenarios de costes **adicionales** y PnL por motivo/check de salida. Los grupos de checks se solapan; no se suman ni demuestran causalidad. No modifica decisiones, balances ni el experimento existente, ni hace nuevas consultas a proveedores. Aplicación 0.11.2; decisiones 0.11.0.
+El informe `server.py performance` añade [sensibilidades de resultados](ROBUSTNESS.md): PnL sin los tres mejores cierres positivos, sin las tres monedas con mayor PnL neto positivo y sin el mejor día positivo de cierres UTC. Incluye media/mediana, concentración de ganancias, escenarios de costes **adicionales**, PnL por motivo/check de salida y resultados según el cierre anterior de la misma moneda dentro del perfil. Los grupos de checks se solapan; no se suman ni demuestran causalidad. No modifica decisiones, balances ni el experimento existente, ni hace nuevas consultas a proveedores. Aplicación 0.11.3; decisiones 0.11.0.
 
 ## Experimento de reentradas v0.11.1
 
@@ -24,7 +24,7 @@ Compose activa una [comparación prospectiva emparejada](SHADOW.md): el tratamie
 docker compose exec paper python server.py shadow-report
 ```
 
-La versión de aplicación es 0.11.2; la versión de decisiones sigue siendo 0.11.0 porque sus filtros y salidas no cambian. No se invalidan posiciones existentes por este cambio de empaquetado. La [investigación de bots y plataformas](BOT_RESEARCH.md) compara herramientas oficiales, código abierto y evidencia disponible; ninguna se presenta como garantía de rentabilidad.
+La versión de aplicación es 0.11.3; la versión de decisiones sigue siendo 0.11.0 porque sus filtros y salidas no cambian. No se invalidan posiciones existentes por este cambio de empaquetado. La [investigación de bots y plataformas](BOT_RESEARCH.md) compara herramientas oficiales, código abierto y evidencia disponible; ninguna se presenta como garantía de rentabilidad.
 
 ## Salidas y evaluación v0.11
 

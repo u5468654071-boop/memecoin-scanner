@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import math
 import statistics
+from bisect import bisect_left
 from collections import Counter, defaultdict
 
 from paper_trading import micro_usdc
@@ -39,6 +40,32 @@ def _object(raw):
 
 def _text(value):
     return value if isinstance(value, str) and value else None
+
+
+def _prior_entry_outcomes(db, table, until, rows):
+    """Classify rows using only the same ledger's entries known at opening."""
+    order, closes = {}, defaultdict(list)
+    counts = Counter()
+    for item in db.execute('SELECT id,mint,opened_at,closed_at,pnl_micro FROM '+table+
+                           ' WHERE opened_at<? ORDER BY mint,opened_at,id', (until,)):
+        mint = item['mint']
+        order[item['id']] = counts[mint]
+        counts[mint] += 1
+        if item['closed_at'] is not None:
+            closes[mint].append((item['closed_at'], item['id'], item['pnl_micro']))
+    times = {}
+    for mint, events in closes.items():
+        events.sort(key=lambda event: (event[0], event[1]))
+        times[mint] = [event[0] for event in events]
+    for position in rows:
+        mint = position['mint']
+        prior_count = order[position['id']]
+        index = bisect_left(times.get(mint, []), position['opened_at'])-1
+        prior = closes[mint][index][2] if index >= 0 else None
+        position['prior_entry_outcome'] = ('first_entry' if prior_count == 0
+            else 'after_loss' if isinstance(prior, int) and prior < 0
+            else 'after_nonloss' if isinstance(prior, int)
+            else 'prior_outcome_unknown')
 
 
 def _accounting(rows, since, until):
@@ -145,6 +172,17 @@ def _metrics(rows, since, until, fixed_micro):
     entry_days = sorted({_utc(p['opened_at'])[:10] for p in closed})
     closing_days = sorted({_utc(p['closed_at'])[:10] for p in closed})
     assumed_costs = 2 * len(closed) * fixed_micro if fixed_micro is not None else None
+    # The label comes from entries known before each opening, including trades
+    # outside this reporting window and from older scanner versions. It is a
+    # diagnostic association, never a replayed portfolio or an entry rule.
+    history = {}
+    for label in ('first_entry', 'after_loss', 'after_nonloss', 'prior_outcome_unknown'):
+        group = [p for p in closed if p['prior_entry_outcome'] == label]
+        pnl = sum(p['pnl_micro'] for p in group)
+        history[label] = {'closed_count': len(group),
+                          'wins': sum(p['pnl_micro'] > 0 for p in group),
+                          'losses': sum(p['pnl_micro'] < 0 for p in group),
+                          'realized_pnl_usdc': pnl/1000000}
     result.update(
         wins=wins, losses=losses, flat=len(closed)-wins-losses,
         win_rate_pct=100*wins/len(closed) if closed else None,
@@ -154,6 +192,10 @@ def _metrics(rows, since, until, fixed_micro):
             ('no_closed_trades' if not closed else 'no_realized_losses_in_window'),
         unique_mints=len(mints), repeated_mints_count=sum(len(trades) > 1 for trades in mints.values()),
         repeat_mint_trades_count=sum(len(trades)-1 for trades in mints.values()),
+        prior_entry_outcomes={'scope': 'same_profile_all_earlier_entries', 'groups': history,
+            'interpretation': 'Clasificación retrospectiva por el último cierre anterior a cada apertura. '
+                'Incluye historial previo a la ventana y a la versión de esta cohorte. No simula '
+                'una cartera que omite reentradas, ni demuestra causalidad o ventaja futura.'},
         closed_trade_entry_days_utc=entry_days, unique_entry_days=len(entry_days),
         closing_days_utc=closing_days, unique_closing_days=len(closing_days),
         median_hold_seconds=statistics.median(p['closed_at']-p['opened_at'] for p in closed) if closed else None,
@@ -226,6 +268,7 @@ def performance_report(store, since, until):
                 FROM '''+position_table+''' p LEFT JOIN observations o ON p.observation_id=o.id
                 WHERE p.opened_at < ? AND (p.closed_at IS NULL OR p.closed_at >= ?)
                 ORDER BY p.opened_at,p.id''', (until, since))]
+            _prior_entry_outcomes(db, position_table, until, rows)
             if any(p['closed_at'] is not None and p['closed_at'] < p['opened_at'] for p in rows):
                 raise ValueError('Posición con cierre anterior a su apertura')
             cohorts = defaultdict(list)

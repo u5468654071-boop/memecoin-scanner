@@ -94,6 +94,32 @@ class PerformanceTests(unittest.TestCase):
         self.assertEqual((cohort['unique_mints'], cohort['repeated_mints_count'], cohort['repeat_mint_trades_count']), (3, 1, 1))
         self.assertEqual(cohort['net_without_best_mint_usdc'], 0.000003)
 
+    def test_prior_entry_outcome_uses_history_before_open_even_outside_window(self):
+        balanced = self.ledger('balanced')
+        aggressive = self.ledger('aggressive')
+        self.position(balanced, 1, 10, -2000000, mint='A', version='old')
+        self.position(balanced, 100, 110, 3000000, mint='A', version='new')
+        self.position(balanced, 120, 130, -1000000, mint='A', version='new')
+        self.position(balanced, 100, 111, -4000000, mint='B', version='new')
+        self.position(balanced, 1, 150, -9000000, mint='C', version='old')
+        self.position(balanced, 100, 120, 2000000, mint='C', version='new')
+        self.position(aggressive, 100, 120, 1000000, mint='A', version='new')
+        report = performance_report(self.store, 100, 140)
+        cohorts = report['profiles']['balanced']['cohorts']
+        current = next(c for c in cohorts if c['scanner_version'] == 'new')
+        groups = current['prior_entry_outcomes']['groups']
+        self.assertEqual(groups['first_entry'], {'closed_count': 1, 'wins': 0, 'losses': 1,
+                                                  'realized_pnl_usdc': -4})
+        self.assertEqual(groups['after_loss'], {'closed_count': 1, 'wins': 1, 'losses': 0,
+                                                'realized_pnl_usdc': 3})
+        self.assertEqual(groups['after_nonloss'], {'closed_count': 1, 'wins': 0, 'losses': 1,
+                                                   'realized_pnl_usdc': -1})
+        self.assertEqual(groups['prior_outcome_unknown'], {'closed_count': 1, 'wins': 1,
+                                                            'losses': 0, 'realized_pnl_usdc': 2})
+        self.assertEqual(report['profiles']['aggressive']['cohorts'][0]
+                         ['prior_entry_outcomes']['groups']['first_entry']['closed_count'], 1)
+        self.assertEqual(sum(group['closed_count'] for group in groups.values()), current['closed_count'])
+
     def test_utc_days_refer_to_closed_trades_and_empty_interval_is_explicit(self):
         prefix = self.ledger()
         self.position(prefix, 86390, 86410, 1)

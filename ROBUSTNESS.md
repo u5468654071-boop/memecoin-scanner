@@ -1,4 +1,4 @@
-# Diagnóstico de resultados ficticios — v0.11.2
+# Diagnóstico de resultados ficticios — v0.11.3
 
 `python server.py performance` consulta SQLite en una instantánea de solo lectura, sin proveedores. Conserva la separación por perfil, versión de decisión y huella del plan. La versión de aplicación cambia; la de decisiones permanece en 0.11.0. No modifica filtros, carteras, cuarentena ni avisos Telegram.
 
@@ -10,6 +10,7 @@ Cada cohorte añade `robustness`:
 - PnL sin el mejor día positivo de **cierre UTC** y detalle diario. No equivale a un filtro por hora/día de entrada.
 - Escenarios con 0, 0,01, 0,05 y 0,10 USDC adicionales por lado y operación cerrada. Se descuentan dos lados del PnL ya neto; no se vuelven a restar costes guardados ni slippage de cotizaciones. Son supuestos de sensibilidad, no estimaciones de tarifas reales. No reconstruyen decisiones de cuentas que hubiesen tenido otros saldos.
 - Coste adicional por lado que consumiría el beneficio observado. Solo existe con PnL positivo y cierres; en pérdidas se informa motivo explícito en lugar de un presupuesto negativo de costes.
+- `prior_entry_outcomes` separa los cierres entre primera entrada conocida, reentrada después de una pérdida, reentrada después de un cierre no negativo y resultado previo desconocido. Usa **solo** cierres anteriores a la apertura y todo el historial de esa cartera, incluso antes de la ventana y de la versión de la cohorte. Los grupos son disjuntos y suman los cierres de la cohorte. No calcula cómo habría rendido una cartera que omitiera operaciones: el saldo y las oportunidades posteriores cambiarían. Tampoco demuestra que una reentrada cause pérdidas.
 
 `exit_reason_pnl` desglosa todos los cierres por motivo registrado; esos grupos sí son disjuntos. `risk_check_pnl` agrupa los checks bloqueados/ausentes/en espera de la evidencia guardada. Cada posición se cuenta una vez por código y estado, aunque un check aparezca repetido. Varios checks de una salida reciben el mismo PnL: **sus grupos se solapan, no se suman**. Es asociación con la evidencia al cierre, no atribución causal ni demostración de que endurecer ese filtro en la entrada hubiese ayudado.
 
